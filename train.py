@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from pytorch_metric_learning import losses, testers
 from pytorch_metric_learning.utils.accuracy_calculator import AccuracyCalculator
 
-from model import EfficientArcFaceModel, TransformerArcFaceModel
+from model import DOLGModel, EfficientArcFaceModel, TransformerArcFaceModel
 from utils import setup_seed, select_data_transforms, get_mean_std, save_mean_std, save_class_to_idx
 
 
@@ -28,7 +28,8 @@ def get_all_embeddings(dataset, model):
     return tester.get_all_embeddings(dataset, model)
 
 
-def train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, device, optimizer, loss_optimizer, criterion, save_dir):
+def train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, device, 
+          optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, save_dir):
     best_loss = np.inf
     for epoch in range(epochs):
         print(f'Epoch {epoch + 1}/{epochs}')
@@ -50,6 +51,8 @@ def train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, d
             loss.backward()
             optimizer.step()
             loss_optimizer.step()
+            scheduler.step()
+            loss_scheduler.step()
 
             train_loss += loss.item()
 
@@ -85,7 +88,8 @@ def train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, d
             print()
 
 
-def main(data_dir, epochs, batch_size, num_classes, embedding_size, lr, loss_lr, seed, early_stop_patience, save_dir):
+def main(data_dir, epochs, batch_size, num_classes, embedding_size, lr, loss_lr, seed, 
+         model_structure, loss_structure, optimizer_selection, early_stop_patience, save_dir):
     setup_seed(seed)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -108,19 +112,41 @@ def main(data_dir, epochs, batch_size, num_classes, embedding_size, lr, loss_lr,
     print(f'class_to_idx: {train_dataset.class_to_idx}')
     save_class_to_idx(data_dir, train_dataset.class_to_idx)
 
-    model = EfficientArcFaceModel(embedding_size=embedding_size).to(device)
-    criterion = losses.SubCenterArcFaceLoss(
-        num_classes=num_classes, embedding_size=embedding_size).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    loss_optimizer = torch.optim.Adam(criterion.parameters(), lr=loss_lr)
-    train(model, epochs, train_loader, val_loader, train_dataset,
-          val_dataset, device, optimizer, loss_optimizer, criterion, save_dir)
+    if model_structure == 'EfficientArcFaceModel':
+        model = EfficientArcFaceModel(embedding_size=embedding_size).to(device)
+    elif model_structure == 'DOLGModel':
+        model = DOLGModel(embedding_size=embedding_size).to(device)
+    else:
+        raise ValueError('model_structure not supported')
+
+    if loss_structure == 'SubCenterArcFaceLoss':
+        criterion = losses.SubCenterArcFaceLoss(num_classes=num_classes, embedding_size=embedding_size).to(device)
+    elif loss_structure == 'ArcFaceLoss':
+        criterion = losses.ArcFaceLoss(num_classes=num_classes, embedding_size=embedding_size).to(device)
+    else:
+        raise ValueError('loss_structure not supported')
+    
+    if optimizer_selection == 'Adam':
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        loss_optimizer = torch.optim.Adam(criterion.parameters(), lr=loss_lr)
+    elif optimizer_selection == 'SGD':
+        optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-5)
+        loss_optimizer = torch.optim.SGD(criterion.parameters(), lr=loss_lr, momentum=0.9, weight_decay=1e-5)
+        
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1000)
+    loss_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(loss_optimizer, T_max=1000)
+        
+    train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, device, 
+          optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, save_dir)
 
 
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-dir', default='')
     parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--model-structure', type=str, default='EfficientArcFaceModel')
+    parser.add_argument('--loss-structure', type=str, default='SubCenterArcFaceLoss')
+    parser.add_argument('--optimizer-selection', type=str, default='Adam')
     parser.add_argument('--loss-lr', type=float, default=1e-4)
     parser.add_argument('--epochs', type=int, default=40)
     parser.add_argument('--batch-size', type=int, default=64)
