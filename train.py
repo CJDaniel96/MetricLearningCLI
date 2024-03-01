@@ -3,8 +3,9 @@ import json
 import os
 import torch
 import numpy as np
+import re
 from tqdm import tqdm
-
+from pathlib import Path
 from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
 
@@ -12,7 +13,7 @@ from pytorch_metric_learning import losses, testers
 from pytorch_metric_learning.utils.accuracy_calculator import AccuracyCalculator
 
 from model import DOLGModel, EfficientArcFaceModel, TransformerArcFaceModel
-from utils import setup_seed, select_data_transforms, get_mean_std, save_mean_std, save_class_to_idx
+from utils import setup_seed, select_data_transforms, get_mean_std, save_mean_std, save_class_to_idx, read_mean_std
 
 
 def history_record(opt):
@@ -88,7 +89,7 @@ def train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, d
             print()
 
 
-def main(data_dir, epochs, batch_size, num_classes, embedding_size, lr, loss_lr, seed, 
+def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, lr, loss_lr, seed, 
          model_structure, loss_structure, optimizer_selection, early_stop_patience, save_dir):
     setup_seed(seed)
 
@@ -98,15 +99,18 @@ def main(data_dir, epochs, batch_size, num_classes, embedding_size, lr, loss_lr,
     data_dir = '\\\\?\\' + data_dir if len(data_dir) > 100 else data_dir
     save_dir = '\\\\?\\' + save_dir if len(save_dir) > 100 else save_dir
 
-    mean, std = get_mean_std(data_dir, batch_size)
-    save_mean_std(data_dir, mean, std)
+    if Path(data_dir).joinpath('mean_std.txt').exists():
+        mean, std = read_mean_std(str(Path(data_dir).joinpath('mean_std.txt')))
+    else:
+        mean, std = get_mean_std(data_dir, batch_size)
+        save_mean_std(data_dir, mean, std)
 
     train_dataset = ImageFolder(os.path.join(
-        data_dir, 'train'), select_data_transforms('train', mean, std))
+        data_dir, 'train'), select_data_transforms('train', mean, std, image_size=image_size))
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True)
     val_dataset = ImageFolder(os.path.join(
-        data_dir, 'val'), select_data_transforms('train', mean, std))
+        data_dir, 'val'), select_data_transforms('train', mean, std, image_size=image_size))
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
     print(f'class_to_idx: {train_dataset.class_to_idx}')
@@ -115,7 +119,7 @@ def main(data_dir, epochs, batch_size, num_classes, embedding_size, lr, loss_lr,
     if model_structure == 'EfficientArcFaceModel':
         model = EfficientArcFaceModel(embedding_size=embedding_size).to(device)
     elif model_structure == 'DOLGModel':
-        model = DOLGModel(embedding_size=embedding_size).to(device)
+        model = DOLGModel(embedding_size=embedding_size, image_size=image_size).to(device)
     else:
         raise ValueError('model_structure not supported')
 
@@ -151,6 +155,7 @@ def parse_opt():
     parser.add_argument('--epochs', type=int, default=40)
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--num-classes', type=int, default=2)
+    parser.add_argument('--image-size', type=int, default=224)
     parser.add_argument('--embedding-size', type=int, default=128)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--early-stop-patience', type=int, default=3)

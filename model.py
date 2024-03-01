@@ -269,28 +269,27 @@ class GeM(nn.Module):
     
 
 class DOLGModel(nn.Module):
-    def __init__(self, hidden_dim=1024, embedding_size=128, image_size=512) -> None:
+    def __init__(self, input_dim=3, hidden_dim=1024, embedding_size=128, image_size=224) -> None:
         super().__init__()
         self.backbone = timm.create_model(
             'tf_efficientnetv2_s',
-            pretrained=True,
+            pretrained=False,
             features_only=True,
-            in_chans=3,
+            in_chans=input_dim,
             out_indices=(2, 3)
         )
         self.orthogonal_fusion = OrthogonalFusion()
-        self.local_branch = LocalBranch(512, hidden_dim, image_size)
+        self.local_branch = LocalBranch(64, hidden_dim, image_size=image_size)
         self.gap = nn.AdaptiveAvgPool2d(1)
         self.gem_pool = GeM()
-        self.fc_1 = nn.Linear(1024, hidden_dim)
+        self.fc_1 = nn.Linear(160, hidden_dim)
         self.fc_2 = nn.Linear(int(2*hidden_dim), embedding_size)
         
     def forward(self, x):
-        output = self.cnn(x)
+        output = self.backbone(x)
 
         local_feat = self.local_branch(output[0])  # ,hidden_channel,16,16
-        global_feat = self.fc_1(self.gem_pool(output[1]).squeeze())  # ,1024
-
+        global_feat = self.fc_1(self.gem_pool(output[1]).squeeze((2, 3)))  # ,1024
         feat = self.orthogonal_fusion(local_feat, global_feat)
         feat = self.gap(feat).squeeze()
         feat = self.fc_2(feat)

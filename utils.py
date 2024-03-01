@@ -23,17 +23,17 @@ def setup_seed(seed = 42):
     # Set a fixed value for the hash seed
     os.environ['PYTHONHASHSEED'] = str(seed)
 
-def select_data_transforms(mode='default', mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+def select_data_transforms(mode='default', mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], image_size=224):
     assert mode in ['default', 'train'], 'mode is not validated'
     if mode == 'default':
         return transforms.Compose([
-            transforms.Resize((224, 224)), 
+            transforms.Resize((image_size, image_size)), 
             # transforms.CenterCrop((224, 224)), 
             transforms.ToTensor()
         ])
     elif mode == 'train':
         return transforms.Compose([
-            transforms.Resize((224, 224)), 
+            transforms.Resize((image_size, image_size)), 
             # transforms.CenterCrop((224, 224)), 
             transforms.ToTensor(),
             transforms.Normalize(mean, std)

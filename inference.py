@@ -89,9 +89,9 @@ def knn_inference(model, data, train_dataset, image_type, mean, std, device, top
         if save_image_folder and nearest_imgs:
             imsave(make_grid(nearest_imgs), mean, std, save_image_folder, 'nearest_imgs')
 
-def extract_query_features(model, image_path, device, mean, std):
+def extract_query_features(model, image_path, image_size, device, mean, std):
     data_transforms = transforms.Compose([
-        transforms.Resize((224, 224)), 
+        transforms.Resize((image_size, image_size)), 
         transforms.ToTensor(), 
         transforms.Normalize(
             mean=mean,
@@ -110,19 +110,19 @@ def extract_query_features(model, image_path, device, mean, std):
     
     return features
 
-def general_inference(model, data, query_image, device, mean, std, top, image_type, save_image_folder):
+def general_inference(model, data, query_image, device, mean, std, top, image_type, image_size, save_image_folder):
     result = []
 
     if os.path.isfile(data):
-        query_features = extract_query_features(model, query_image, device, mean, std)
-        output = extract_query_features(model, data, device, mean, std)
-        score = torch.cosine_similarity(output, query_features)
+        query_features = extract_query_features(model, query_image, image_size, device, mean, std)
+        output = extract_query_features(model, data, image_size, device, mean, std)
+        score = torch.cosine_similarity(output, query_features, dim=0)
         result.append([score.detach().item(), data])
     elif os.path.isdir(data):
         for image in tqdm(glob(f'{data}\**\*.{image_type}', recursive=True)):
-            query_features = extract_query_features(model, query_image, device, mean, std)
-            output = extract_query_features(model, image, device, mean, std)
-            score = torch.cosine_similarity(output, query_features)
+            query_features = extract_query_features(model, query_image, image_size, device, mean, std)
+            output = extract_query_features(model, image, image_size, device, mean, std)
+            score = torch.cosine_similarity(output, query_features, dim=0)
             result.append([score.detach().item(), image])
     
     result.sort(reverse=True)
@@ -137,7 +137,7 @@ def general_inference(model, data, query_image, device, mean, std, top, image_ty
     
     result_df.to_csv(os.path.join(save_image_folder, 'result.csv'))
 
-def total_inference(model, train_dataset, data, query_image, query_label, device, mean, std, top, image_type, save_image_folder):
+def total_inference(model, train_dataset, data, query_image, query_label, device, mean, std, top, image_type, image_size, save_image_folder):
     dataset = ImageFolder(train_dataset, select_data_transforms('train', mean, std))
     match_finder = MatchFinder(distance=CosineSimilarity(), threshold=0.9)
     inference_model = InferenceModel(model, match_finder=match_finder)
@@ -147,8 +147,8 @@ def total_inference(model, train_dataset, data, query_image, query_label, device
     knn_result = []
 
     if os.path.isfile(data):
-        query_features = extract_query_features(model, query_image, device, mean, std)
-        output = extract_query_features(model, data, device, mean, std)
+        query_features = extract_query_features(model, query_image, image_size, device, mean, std)
+        output = extract_query_features(model, data, image_size, device, mean, std)
         score = torch.cosine_similarity(output, query_features)
         
         nearest_imgs = []
@@ -190,7 +190,7 @@ def total_inference(model, train_dataset, data, query_image, query_label, device
 
     result_df.to_csv(os.path.join(save_image_folder, 'result.csv'))
 
-def main(weights, data, train_dataset, query_image, query_label, image_type, seed, mean_std_file, top, confidence, save_image_folder, mode):
+def main(weights, data, train_dataset, query_image, query_label, image_type, image_size, seed, mean_std_file, top, confidence, save_image_folder, mode):
     setup_seed(seed)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -205,11 +205,11 @@ def main(weights, data, train_dataset, query_image, query_label, image_type, see
     model = torch.load(weights, map_location='cuda')
 
     if mode == 'total':
-        total_inference(model, train_dataset, data, query_image, query_label, device, mean, std, top, image_type, save_image_folder)
+        total_inference(model, train_dataset, data, query_image, query_label, device, mean, std, top, image_type, image_size, save_image_folder)
     elif mode == 'knn':
         knn_inference(model, data, train_dataset, image_type, mean, std, device, top, save_image_folder)
     else:
-        general_inference(model, data, query_image, device, mean, std, top, image_type, save_image_folder)
+        general_inference(model, data, query_image, device, mean, std, top, image_type, image_size, save_image_folder)
 
 def parse_opt():
     parser = argparse.ArgumentParser()
@@ -221,6 +221,7 @@ def parse_opt():
     parser.add_argument('--query-image', type=str, default='')
     parser.add_argument('--query-label', type=str, default='')
     parser.add_argument('--image-type', type=str, default='jpg')
+    parser.add_argument('--image-size', type=int, default=224)
     parser.add_argument('--mean-std-file', type=str, default='', help='e.x. /path/to/mean_std.txt')
     parser.add_argument('--save-image-folder', type=str, default='', help='save inference image to folder by result')
     parser.add_argument('--seed', type=int, default=0)
