@@ -89,7 +89,7 @@ def train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, d
             print()
 
 
-def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, lr, loss_lr, seed, 
+def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, pretrained_weights, lr, loss_lr, seed, 
          model_structure, loss_structure, optimizer_selection, early_stop_patience, save_dir):
     setup_seed(seed)
 
@@ -117,9 +117,19 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, 
     save_class_to_idx(data_dir, train_dataset.class_to_idx)
 
     if model_structure == 'EfficientArcFaceModel':
-        model = EfficientArcFaceModel(embedding_size=embedding_size).to(device)
+        if pretrained_weights:
+            model = EfficientArcFaceModel(embedding_size=embedding_size, pretrained=False).to(device)
+            model.load_state_dict(torch.load(pretrained_weights))
+            model.cuda()
+        else:
+            model = EfficientArcFaceModel(embedding_size=embedding_size).to(device)
     elif model_structure == 'DOLGModel':
-        model = DOLGModel(embedding_size=embedding_size, image_size=image_size).to(device)
+        if pretrained_weights:
+            model = DOLGModel(embedding_size=embedding_size, image_size=image_size, pretrained=False).to(device)
+            model.load_state_dict(torch.load(pretrained_weights))
+            model.cuda()
+        else:
+            model = DOLGModel(embedding_size=embedding_size, image_size=image_size).to(device)
     else:
         raise ValueError('model_structure not supported')
 
@@ -148,6 +158,7 @@ def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-dir', default='')
     parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--pretrained-weights', type=str, default='')
     parser.add_argument('--model-structure', type=str, default='EfficientArcFaceModel')
     parser.add_argument('--loss-structure', type=str, default='SubCenterArcFaceLoss')
     parser.add_argument('--optimizer-selection', type=str, default='Adam')

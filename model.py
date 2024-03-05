@@ -269,11 +269,11 @@ class GeM(nn.Module):
     
 
 class DOLGModel(nn.Module):
-    def __init__(self, input_dim=3, hidden_dim=1024, embedding_size=128, image_size=224) -> None:
+    def __init__(self, model_name='tf_efficientnetv2_s', pretrained=False, input_dim=3, hidden_dim=1024, embedding_size=128, image_size=224) -> None:
         super().__init__()
         self.backbone = timm.create_model(
-            'tf_efficientnetv2_s',
-            pretrained=False,
+            model_name,
+            pretrained=pretrained,
             features_only=True,
             in_chans=input_dim,
             out_indices=(2, 3)

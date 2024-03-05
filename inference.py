@@ -116,13 +116,13 @@ def general_inference(model, data, query_image, device, mean, std, top, image_ty
     if os.path.isfile(data):
         query_features = extract_query_features(model, query_image, image_size, device, mean, std)
         output = extract_query_features(model, data, image_size, device, mean, std)
-        score = torch.cosine_similarity(output, query_features, dim=0)
+        score = torch.cosine_similarity(output, query_features)
         result.append([score.detach().item(), data])
     elif os.path.isdir(data):
         for image in tqdm(glob(f'{data}\**\*.{image_type}', recursive=True)):
             query_features = extract_query_features(model, query_image, image_size, device, mean, std)
             output = extract_query_features(model, image, image_size, device, mean, std)
-            score = torch.cosine_similarity(output, query_features, dim=0)
+            score = torch.cosine_similarity(output, query_features)
             result.append([score.detach().item(), image])
     
     result.sort(reverse=True)
