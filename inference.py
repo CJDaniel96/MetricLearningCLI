@@ -6,6 +6,7 @@ import numpy as np
 import shutil
 import cv2
 from PIL import Image
+from pathlib import Path
 from glob import glob
 from tqdm import tqdm
 from torchvision.datasets import ImageFolder
@@ -15,6 +16,7 @@ from matplotlib import pyplot as plt
 from pytorch_metric_learning.distances import CosineSimilarity
 from pytorch_metric_learning.utils.inference import InferenceModel, MatchFinder, FaissKMeans
 from utils import setup_seed, read_mean_std, select_data_transforms
+from model import EfficientArcFaceModel, DOLGModel
 
 
 def imsave(img, mean, std, save_image_folder, title, figsize=(8, 4)):
@@ -124,6 +126,12 @@ def general_inference(model, data, query_image, device, mean, std, top, image_ty
             output = extract_query_features(model, image, image_size, device, mean, std)
             score = torch.cosine_similarity(output, query_features)
             result.append([score.detach().item(), image])
+    elif '*' in data:
+        for image in tqdm(sorted(Path(data).parent.glob(Path(data).name))):
+            query_features = extract_query_features(model, query_image, image_size, device, mean, std)
+            output = extract_query_features(model, str(image), image_size, device, mean, std)
+            score = torch.cosine_similarity(output, query_features)
+            result.append([score.detach().item(), str(image)])
     
     result.sort(reverse=True)
     result_df = pd.DataFrame(result, columns=['Score', 'ImagePath'])
@@ -190,7 +198,7 @@ def total_inference(model, train_dataset, data, query_image, query_label, device
 
     result_df.to_csv(os.path.join(save_image_folder, 'result.csv'))
 
-def main(weights, data, train_dataset, query_image, query_label, image_type, image_size, seed, mean_std_file, top, confidence, save_image_folder, mode):
+def main(weights, data, train_dataset, query_image, query_label, image_type, image_size, seed, mean_std_file, top, confidence, save_image_folder, mode, model_structure, embedding_size):
     setup_seed(seed)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -202,7 +210,16 @@ def main(weights, data, train_dataset, query_image, query_label, image_type, ima
     if mean_std_file:
         mean, std = read_mean_std(mean_std_file)
 
-    model = torch.load(weights, map_location='cuda')
+    if model_structure == 'EfficientArcFaceModel':
+        model = EfficientArcFaceModel(embedding_size=embedding_size).to(device)
+        model.load_state_dict(torch.load(weights))
+        model.cuda()
+        model.eval()
+    elif model_structure == 'DOLG':
+        model = DOLGModel(embedding_size=embedding_size).to(device)
+        model.load_state_dict(torch.load(weights))
+        model.cuda()
+        model.eval()
 
     if mode == 'total':
         total_inference(model, train_dataset, data, query_image, query_label, device, mean, std, top, image_type, image_size, save_image_folder)
@@ -227,6 +244,8 @@ def parse_opt():
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--top', type=int, default=3)
     parser.add_argument('--mode', type=str, default='')
+    parser.add_argument('--model-structure', type=str, default='EfficientArcFaceModel')
+    parser.add_argument('--embedding-size', type=int, default='512')
 
     opt = parser.parse_args()
 
