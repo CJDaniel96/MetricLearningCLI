@@ -157,8 +157,7 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, 
     else:
         early_stopping = None
     
-    train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, device, 
-          optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, save_dir, early_stopping)
+    train(model, epochs, train_loader, val_loader, device, optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, save_dir, early_stopping)
 
 
 def parse_opt():
