@@ -8,6 +8,7 @@ from tqdm import tqdm
 from pathlib import Path
 from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from pytorch_metric_learning import losses, testers
 from model import DOLGModel, EfficientArcFaceModel
 from utils import EarlyStopping, setup_seed, select_data_transforms, get_mean_std, save_mean_std, save_class_to_idx, read_mean_std
@@ -27,6 +28,7 @@ def get_all_embeddings(dataset, model):
 
 
 def train(model, epochs, train_loader, val_loader, device, optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, save_dir, early_stopping):
+    writer = SummaryWriter(save_dir / 'logs')
     best_loss = np.inf
     for epoch in range(epochs):
         print(f'Epoch {epoch + 1}/{epochs}')
@@ -71,6 +73,9 @@ def train(model, epochs, train_loader, val_loader, device, optimizer, loss_optim
             f'| Val Loss: {val_loss/len(val_loader):3.6f}'
         )
         print()
+        
+        writer.add_scalar('Loss/train', train_loss/len(train_loader), epoch + 1)
+        writer.add_scalar('Loss/val', val_loss/len(val_loader), epoch + 1)
 
         torch.save(
             model.state_dict(),
