@@ -105,7 +105,7 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, 
     save_dir = Path(save_dir)
 
     if data_dir.joinpath('mean_std.txt').exists():
-        mean, std = read_mean_std(str(data_dir.joinpath('mean_std.txt')))
+        mean, std = read_mean_std(data_dir.joinpath('mean_std.txt'))
     else:
         mean, std = get_mean_std(data_dir, batch_size)
         save_mean_std(data_dir, mean, std)
