@@ -3,6 +3,7 @@ import re
 import numpy as np
 import torch
 import random
+from pathlib import Path
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
@@ -39,8 +40,8 @@ def select_data_transforms(mode='default', mean=[0.485, 0.456, 0.406], std=[0.22
             transforms.Normalize(mean, std)
         ])
 
-def get_mean_std(data_dir, batch_size):
-    image_datasets = ImageFolder(os.path.join(data_dir, 'train'), select_data_transforms())
+def get_mean_std(data_dir: Path, batch_size):
+    image_datasets = ImageFolder(str(data_dir.joinpath('train')), select_data_transforms())
     dataloaders = DataLoader(image_datasets, batch_size=batch_size, shuffle=True)
     mean = 0.
     std = 0.
@@ -56,20 +57,20 @@ def get_mean_std(data_dir, batch_size):
 
     return mean, std
 
-def save_mean_std(data_dir, mean, std):
-    with open(os.path.join(data_dir, 'mean_std.txt'), 'w') as f:
+def save_mean_std(data_dir: Path, mean, std):
+    with data_dir.joinpath('mean_std.txt').open('w') as f:
         f.write(f'mean: {mean}\n')
         f.write(f'std: {std}')
 
-def read_mean_std(mean_std_file):
-    with open(mean_std_file, 'r') as f:
+def read_mean_std(mean_std_file: Path):
+    with mean_std_file.open('r') as f:
         mean = eval(re.search('[\[].*[]]', f.readline())[0])
         std = eval(re.search('[\[].*[]]', f.readline())[0])
 
     return mean, std
 
-def save_class_to_idx(data_dir, class_to_idx):
-    with open(os.path.join(data_dir, 'class_to_idx.txt'), 'w') as f:
+def save_class_to_idx(data_dir: Path, class_to_idx):
+    with data_dir.joinpath('class_to_idx.txt').open('w') as f:
         for classes in class_to_idx:
             f.write(f'{classes} {class_to_idx[classes]}\n')
             

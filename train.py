@@ -15,11 +15,10 @@ from utils import EarlyStopping, setup_seed, select_data_transforms, get_mean_st
 
 
 def history_record(opt):
-    save_dir = '\\\\?\\' + opt.save_dir if len(opt.save_dir) > 100 else opt.save_dir
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+    save_dir = Path(opt.save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
     json_object = json.dumps(vars(opt))
-    with open(os.path.join(save_dir, 'history.json'), 'w') as outfile:
+    with save_dir.joinpath('history.json').open('w') as outfile:
         outfile.write(json_object)
 
 def get_all_embeddings(dataset, model):
@@ -79,13 +78,12 @@ def train(model, epochs, train_loader, val_loader, device, optimizer, loss_optim
 
         torch.save(
             model.state_dict(),
-            os.path.join(
-                save_dir, f'Epoch_{epoch+1}_Loss_{val_loss/len(val_loader):.6f}.pt')
+            str(save_dir.joinpath(f'Epoch_{epoch+1}_Loss_{train_loss/len(train_loader):.6f}.pt'))
         )
 
         if val_loss < best_loss:
             best_loss = val_loss
-            torch.save(model.state_dict(), os.path.join(save_dir, 'best.pt'))
+            torch.save(model.state_dict(), save_dir.joinpath('best.pt'))
             print(f'saving best model with loss {val_loss/len(val_loader):.6f}')
             print()
             
@@ -102,22 +100,19 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, 
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Device: {device}')
+    
+    data_dir = Path(data_dir)
+    save_dir = Path(save_dir)
 
-    data_dir = '\\\\?\\' + data_dir if len(data_dir) > 100 else data_dir
-    save_dir = '\\\\?\\' + save_dir if len(save_dir) > 100 else save_dir
-
-    if Path(data_dir).joinpath('mean_std.txt').exists():
-        mean, std = read_mean_std(str(Path(data_dir).joinpath('mean_std.txt')))
+    if data_dir.joinpath('mean_std.txt').exists():
+        mean, std = read_mean_std(str(data_dir.joinpath('mean_std.txt')))
     else:
         mean, std = get_mean_std(data_dir, batch_size)
         save_mean_std(data_dir, mean, std)
 
-    train_dataset = ImageFolder(os.path.join(
-        data_dir, 'train'), select_data_transforms('train', mean, std, image_size=image_size))
-    train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True)
-    val_dataset = ImageFolder(os.path.join(
-        data_dir, 'val'), select_data_transforms('train', mean, std, image_size=image_size))
+    train_dataset = ImageFolder(str(data_dir.joinpath('train')) , select_data_transforms('train', mean, std, image_size=image_size))
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_dataset = ImageFolder(str(data_dir.joinpath('val')), select_data_transforms('train', mean, std, image_size=image_size))
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
     print(f'class_to_idx: {train_dataset.class_to_idx}')
