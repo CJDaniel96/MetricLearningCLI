@@ -72,3 +72,32 @@ def save_class_to_idx(data_dir, class_to_idx):
     with open(os.path.join(data_dir, 'class_to_idx.txt'), 'w') as f:
         for classes in class_to_idx:
             f.write(f'{classes} {class_to_idx[classes]}\n')
+            
+
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0):
+        """
+        初始化 EarlyStopping 類別
+        :param patience: 在停止訓練之前允許的驗證損失不改善的次數
+        :param min_delta: 驗證損失改善的最小變化
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_loss = None
+        self.counter = 0
+        self.early_stop = False
+
+    def __call__(self, val_loss):
+        """
+        更新驗證損失並檢查是否應該停止訓練
+        :param val_loss: 當前的驗證損失
+        """
+        if self.best_loss is None:
+            self.best_loss = val_loss
+        elif val_loss < self.best_loss - self.min_delta:
+            self.best_loss = val_loss
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True

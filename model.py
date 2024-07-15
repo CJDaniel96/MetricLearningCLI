@@ -288,10 +288,90 @@ class DOLGModel(nn.Module):
     def forward(self, x):
         output = self.backbone(x)
 
-        local_feat = self.local_branch(output[0])  # ,hidden_channel,16,16
-        global_feat = self.fc_1(self.gem_pool(output[1]).squeeze((2, 3)))  # ,1024
+        local_feat = self.local_branch(output[-1])  # ,hidden_channel,16,16
+        global_feat = self.fc_1(self.gem_pool(output[-2]).squeeze((2, 3)))  # ,1024
         feat = self.orthogonal_fusion(local_feat, global_feat)
         feat = self.gap(feat).squeeze()
         feat = self.fc_2(feat)
 
         return feat
+    
+
+class MultiheadArcFaceModel(nn.Module):
+    """
+    EfficientArcFaceModel class for extracting features using EfficientNetV2 and applying ArcFace.
+
+    Attributes:
+        backbone (torch.nn.Module): EfficientNetV2 model for feature extraction.
+        local_branch (torch.nn.Module): Multi-head self-attention for local features.
+        global_branch (torch.nn.Module): Global feature extraction.
+        fusion (torch.nn.Module): Orthogonal fusion of local and global features.
+        head (torch.nn.Module): Head layers for ArcFace.
+
+    Methods:
+        forward(x): Forward pass of the model.
+    """
+    def __init__(self, model_name='tf_efficientnetv2_s', pretrained=True, features_only=True, embedding_size=128) -> None:
+        """
+        Initialize the EfficientArcFaceModel instance.
+        """
+        super().__init__()
+        self.backbone = timm.create_model(model_name, pretrained=pretrained, features_only=features_only)
+        
+        # Local branch with multi-head self-attention
+        self.local_branch = nn.Sequential(
+            nn.Conv2d(256, 1280, 1, 1, bias=False), 
+            nn.BatchNorm2d(1280, 0.001), 
+            nn.SiLU(), 
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.MultiheadAttention(embed_dim=1280, num_heads=8)
+        )
+        
+        # Global branch
+        self.global_branch = nn.Sequential(
+            nn.Conv2d(256, 1280, 1, 1, bias=False), 
+            nn.BatchNorm2d(1280, 0.001), 
+            nn.SiLU(), 
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten()
+        )
+        
+        # Orthogonal fusion
+        self.fusion = nn.Linear(2560, 1280)
+        
+        # Head for final embedding
+        self.head = nn.Sequential(
+            nn.Linear(1280, embedding_size),
+            nn.Linear(embedding_size, embedding_size),
+            nn.BatchNorm1d(embedding_size), 
+            nn.ReLU()
+        )
+
+    def forward(self, x):
+        """
+        Forward pass of the model.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Output tensor.
+        """
+        features = self.backbone(x)
+        local_features = self.local_branch(features[-1])
+        global_features = self.global_branch(features[-2])
+        
+        # Orthogonal fusion
+        global_feat_norm = torch.norm(global_features, p=2, dim=1, keepdim=True)
+        projection = torch.bmm(global_features.unsqueeze(2), torch.flatten(local_features, start_dim=2))
+        projection = torch.bmm(global_features.unsqueeze(1), projection).view(local_features.size())
+        projection = projection / (global_feat_norm * global_feat_norm).view(-1, 1, 1, 1)
+        orthogonal_comp = local_features - projection
+        global_features = global_features.unsqueeze(-1).unsqueeze(-1)
+        fused_features = torch.cat([global_features.expand(orthogonal_comp.size()), orthogonal_comp], dim=1)
+        
+        # Final embedding
+        embedding = self.head(fused_features)
+
+        return embedding

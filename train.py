@@ -8,12 +8,9 @@ from tqdm import tqdm
 from pathlib import Path
 from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
-
 from pytorch_metric_learning import losses, testers
-from pytorch_metric_learning.utils.accuracy_calculator import AccuracyCalculator
-
-from model import DOLGModel, EfficientArcFaceModel, TransformerArcFaceModel
-from utils import setup_seed, select_data_transforms, get_mean_std, save_mean_std, save_class_to_idx, read_mean_std
+from model import DOLGModel, EfficientArcFaceModel
+from utils import EarlyStopping, setup_seed, select_data_transforms, get_mean_std, save_mean_std, save_class_to_idx, read_mean_std
 
 
 def history_record(opt):
@@ -29,8 +26,7 @@ def get_all_embeddings(dataset, model):
     return tester.get_all_embeddings(dataset, model)
 
 
-def train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, device, 
-          optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, save_dir):
+def train(model, epochs, train_loader, val_loader, device, optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, save_dir, early_stopping):
     best_loss = np.inf
     for epoch in range(epochs):
         print(f'Epoch {epoch + 1}/{epochs}')
@@ -77,16 +73,22 @@ def train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, d
         print()
 
         torch.save(
-            model,
+            model.state_dict(),
             os.path.join(
                 save_dir, f'Epoch_{epoch+1}_Loss_{val_loss/len(val_loader):.6f}.pt')
         )
 
         if val_loss < best_loss:
             best_loss = val_loss
-            torch.save(model, os.path.join(save_dir, 'best.pt'))
+            torch.save(model.state_dict(), os.path.join(save_dir, 'best.pt'))
             print(f'saving best model with loss {val_loss/len(val_loader):.6f}')
             print()
+            
+        if early_stopping:
+            early_stopping(val_loss)
+            if early_stopping.early_stop:
+                print("Early stopping")
+                break
 
 
 def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, pretrained_weights, lr, loss_lr, seed, 
@@ -149,9 +151,14 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, 
         
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1000)
     loss_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(loss_optimizer, T_max=1000)
-        
+    
+    if early_stop_patience:
+        early_stopping = EarlyStopping(patience=early_stop_patience)
+    else:
+        early_stopping = None
+    
     train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, device, 
-          optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, save_dir)
+          optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, save_dir, early_stopping)
 
 
 def parse_opt():
