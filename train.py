@@ -10,7 +10,7 @@ from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from pytorch_metric_learning import losses, testers
-from model import DOLGModel, EfficientArcFaceModel
+from model import DOLGModel, EfficientArcFaceModel, MultiheadArcFaceModel
 from utils import EarlyStopping, setup_seed, select_data_transforms, get_mean_std, save_mean_std, save_class_to_idx, read_mean_std
 
 
@@ -132,6 +132,11 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, 
             model.cuda()
         else:
             model = DOLGModel(embedding_size=embedding_size, image_size=image_size).to(device)
+    elif model_structure == 'MultiheadArcFaceModel':
+        if pretrained_weights:
+            model = MultiheadArcFaceModel(embedding_size=embedding_size, pretrained=False).to(device)
+            model.load_state_dict(torch.load(pretrained_weights))
+            model.cuda()
     else:
         raise ValueError('model_structure not supported')
 
