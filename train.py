@@ -10,6 +10,7 @@ from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from pytorch_metric_learning import losses, testers
+from pytorch_metric_learning.utils.accuracy_calculator import AccuracyCalculator
 from model import DOLGModel, EfficientArcFaceModel, MultiheadArcFaceModel
 from utils import EarlyStopping, setup_seed, select_data_transforms, get_mean_std, save_mean_std, save_class_to_idx, read_mean_std
 
@@ -25,8 +26,7 @@ def get_all_embeddings(dataset, model):
     tester = testers.BaseTester()
     return tester.get_all_embeddings(dataset, model)
 
-
-def train(model, epochs, train_loader, val_loader, device, optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, save_dir, early_stopping):
+def train(model, epochs, train_loader, val_loader, train_set, test_set, device, optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, accuracy_calculator, save_dir, early_stopping):
     writer = SummaryWriter(save_dir / 'logs')
     best_loss = np.inf
     for epoch in range(epochs):
@@ -71,10 +71,22 @@ def train(model, epochs, train_loader, val_loader, device, optimizer, loss_optim
             f'Train Loss: {train_loss/len(train_loader):3.6f}',
             f'| Val Loss: {val_loss/len(val_loader):3.6f}'
         )
+        
+        train_embeddings, train_labels = get_all_embeddings(train_set, model)
+        test_embeddings, test_labels = get_all_embeddings(test_set, model)
+        train_labels = train_labels.squeeze(1)
+        test_labels = test_labels.squeeze(1)
+        print("Computing accuracy")
+        accuracies = accuracy_calculator.get_accuracy(
+            test_embeddings, test_labels, train_embeddings, train_labels, False
+        )
+        breakpoint()
+        print("Test set accuracy (Precision@1) = {}".format(accuracies["precision_at_1"]))
         print()
         
         writer.add_scalar('Loss/train', train_loss/len(train_loader), epoch + 1)
         writer.add_scalar('Loss/val', val_loss/len(val_loader), epoch + 1)
+        writer.add_scalar('Accuracy/precision_at_1', accuracies["precision_at_1"], epoch + 1)
 
         torch.save(
             model.state_dict(),
@@ -111,7 +123,7 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, 
         save_mean_std(data_dir, mean, std)
 
     train_dataset = ImageFolder(str(data_dir.joinpath('train')) , select_data_transforms('train', mean, std, image_size=image_size))
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     val_dataset = ImageFolder(str(data_dir.joinpath('val')), select_data_transforms('train', mean, std, image_size=image_size))
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
@@ -159,12 +171,14 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1000)
     loss_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(loss_optimizer, T_max=1000)
     
+    accuracy_calculator = AccuracyCalculator(include=("precision_at_1",), k=1)
+    
     if early_stop_patience:
         early_stopping = EarlyStopping(patience=early_stop_patience)
     else:
         early_stopping = None
     
-    train(model, epochs, train_loader, val_loader, device, optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, save_dir, early_stopping)
+    train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, device, optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, accuracy_calculator, save_dir, early_stopping)
 
 
 def parse_opt():
