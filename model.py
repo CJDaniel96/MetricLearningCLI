@@ -319,14 +319,14 @@ class MultiheadArcFaceModel(nn.Module):
         self.backbone = timm.create_model(model_name, pretrained=pretrained, features_only=features_only)
         
         # Local branch with multi-head self-attention
-        self.local_branch = nn.Sequential(
+        self.local_branch_conv = nn.Sequential(
             nn.Conv2d(256, 1280, 1, 1, bias=False), 
             nn.BatchNorm2d(1280, 0.001), 
             nn.SiLU(), 
             nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.MultiheadAttention(embed_dim=1280, num_heads=8)
+            nn.Flatten()
         )
+        self.local_branch_attention = nn.MultiheadAttention(embed_dim=1280, num_heads=8)
         
         # Global branch
         self.global_branch = nn.Sequential(
@@ -359,7 +359,11 @@ class MultiheadArcFaceModel(nn.Module):
             torch.Tensor: Output tensor.
         """
         features = self.backbone(x)
-        local_features = self.local_branch(features[-1])
+        local_features = self.local_branch_conv(features[-1])
+        local_features = local_features.unsqueeze(0)  # Add batch dimension for attention
+        local_features, _ = self.local_branch_attention(local_features, local_features, local_features)
+        local_features = local_features.squeeze(0)  # Remove batch dimension after attention
+        
         global_features = self.global_branch(features[-2])
         
         # Orthogonal fusion
