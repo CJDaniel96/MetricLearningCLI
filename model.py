@@ -318,9 +318,15 @@ class MultiheadArcFaceModel(nn.Module):
         super().__init__()
         self.backbone = timm.create_model(model_name, pretrained=pretrained, features_only=features_only)
         
+        # Get the output feature shapes by passing a dummy input through the backbone
+        dummy_input = torch.randn(1, 3, 224, 224)  # Adjust the input size as needed
+        features = self.backbone(dummy_input)
+        local_in_channels = features[-1].shape[1]
+        global_in_channels = features[-2].shape[1]
+        
         # Local branch with multi-head self-attention
         self.local_branch_conv = nn.Sequential(
-            nn.Conv2d(256, 1280, 1, 1, bias=False), 
+            nn.Conv2d(local_in_channels, 1280, 1, 1, bias=False), 
             nn.BatchNorm2d(1280, 0.001), 
             nn.SiLU(), 
             nn.AdaptiveAvgPool2d(1),
@@ -330,7 +336,7 @@ class MultiheadArcFaceModel(nn.Module):
         
         # Global branch
         self.global_branch = nn.Sequential(
-            nn.Conv2d(256, 1280, 1, 1, bias=False), 
+            nn.Conv2d(global_in_channels, 1280, 1, 1, bias=False), 
             nn.BatchNorm2d(1280, 0.001), 
             nn.SiLU(), 
             nn.AdaptiveAvgPool2d(1),
