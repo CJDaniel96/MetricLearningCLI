@@ -367,14 +367,16 @@ class MultiheadArcFaceModel(nn.Module):
         features = self.backbone(x)
         local_features = self.local_branch_conv(features[-1])
         local_features = local_features.unsqueeze(0)  # Add batch dimension for attention
+        local_features = local_features.permute(2, 0, 1)  # Permute dimensions for attention
         local_features, _ = self.local_branch_attention(local_features, local_features, local_features)
+        local_features = local_features.permute(1, 2, 0)  # Permute dimensions after attention
         local_features = local_features.squeeze(0)  # Remove batch dimension after attention
         
         global_features = self.global_branch(features[-2])
         
         # Orthogonal fusion
         global_feat_norm = torch.norm(global_features, p=2, dim=1, keepdim=True)
-        projection = torch.bmm(global_features.unsqueeze(2), torch.flatten(local_features, start_dim=2))
+        projection = torch.bmm(global_features.unsqueeze(2), local_features.unsqueeze(0))
         projection = torch.bmm(global_features.unsqueeze(1), projection).view(local_features.size())
         projection = projection / (global_feat_norm * global_feat_norm).view(-1, 1, 1, 1)
         orthogonal_comp = local_features - projection
