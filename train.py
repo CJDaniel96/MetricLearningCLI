@@ -137,6 +137,8 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, 
             model = MultiheadArcFaceModel(embedding_size=embedding_size, pretrained=False).to(device)
             model.load_state_dict(torch.load(pretrained_weights))
             model.cuda()
+        else:
+            model = MultiheadArcFaceModel(embedding_size=embedding_size).to(device)
     else:
         raise ValueError('model_structure not supported')
 
