@@ -83,7 +83,6 @@ def train(model, epochs, train_loader, val_loader, train_set, test_set, device, 
         accuracies = accuracy_calculator.get_accuracy(
             test_embeddings, test_labels, train_embeddings, train_labels, False
         )
-        breakpoint()
         print("Test set accuracy (Precision@1) = {}".format(accuracies["precision_at_1"]))
         print()
         
