@@ -118,7 +118,7 @@ def train(model, epochs, train_loader, val_loader, train_set, test_set, device, 
     test_labels = test_labels.squeeze(1)
     
     knn = KNeighborsClassifier(n_neighbors=num_classes)
-    knn.fit(train_embeddings, train_labels)
+    knn.fit(train_embeddings.cpu().numpy(), train_labels.cpu().numpy())
 
     test_predictions = knn.predict(test_embeddings)
     knn_accuracy = accuracy_calculator.get_accuracy(test_labels, test_predictions, embeddings_come_from_same_source=True)
@@ -127,7 +127,6 @@ def train(model, epochs, train_loader, val_loader, train_set, test_set, device, 
     knn_save_dir = save_dir.joinpath('knn')
     knn_save_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(knn, knn_save_dir.joinpath(f'best_knn.pkl'))
-
 
 
 def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, pretrained_weights, lr, loss_lr, seed, 
