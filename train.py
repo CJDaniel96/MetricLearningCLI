@@ -126,7 +126,7 @@ def train(model, epochs, train_loader, val_loader, train_set, test_set, device, 
     index.add(train_embeddings)
     faiss_index_save_dir = save_dir.joinpath('faiss')
     faiss_index_save_dir.mkdir(parents=True, exist_ok=True)
-    faiss.write_index(faiss.index_cpu_to_gpu(index), str(faiss_index_save_dir.joinpath('faiss.index')))
+    faiss.write_index(faiss.index_gpu_to_cpu(index), str(faiss_index_save_dir.joinpath('faiss.index')))
     joblib.dump(train_labels.cpu().numpy(), faiss_index_save_dir.joinpath('labels.pkl'))
 
 
