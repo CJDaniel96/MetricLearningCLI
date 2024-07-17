@@ -31,7 +31,7 @@ def get_all_embeddings(dataset, model):
 def train(model, epochs, train_loader, val_loader, train_set, test_set, device, optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, accuracy_calculator: AccuracyCalculator, num_classes, save_dir, early_stopping):
     writer = SummaryWriter(save_dir / 'logs')
     best_loss = np.inf
-    best_knn_accuracy = 0.0
+    best_model = None
     for epoch in range(epochs):
         print(f'Epoch {epoch + 1}/{epochs}')
         print('-' * 10)
@@ -81,42 +81,29 @@ def train(model, epochs, train_loader, val_loader, train_set, test_set, device, 
         test_labels = test_labels.squeeze(1)
         print("Computing accuracy")
         accuracies = accuracy_calculator.get_accuracy(
-            test_embeddings, test_labels, train_embeddings, train_labels, False
+            query=test_embeddings, 
+            query_labels=test_labels, 
+            reference=train_embeddings, 
+            reference_labels=train_labels, 
+            embeddings_come_from_same_source=False
         )
         print("Test set accuracy (Precision@1) = {}".format(accuracies["precision_at_1"]))
         print()
         
-        knn = KNeighborsClassifier(n_neighbors=num_classes)
-        knn.fit(train_embeddings, train_labels)
-
-        test_predictions = knn.predict(test_embeddings)
-        knn_accuracy = np.mean(test_predictions == test_labels)
-        print(f'KNN accuracy: {knn_accuracy}')
-        
         writer.add_scalar('Loss/train', train_loss/len(train_loader), epoch + 1)
         writer.add_scalar('Loss/val', val_loss/len(val_loader), epoch + 1)
         writer.add_scalar('Accuracy/precision_at_1', accuracies["precision_at_1"], epoch + 1)
-        writer.add_scalar('Accuracy/knn', knn_accuracy, epoch + 1)
 
         torch.save(
             model.state_dict(),
             str(save_dir.joinpath(f'Epoch_{epoch+1}_Loss_{train_loss/len(train_loader):.6f}.pt'))
         )
         
-        knn_save_dir = save_dir.joinpath('knn')
-        knn_save_dir.mkdir(parents=True, exist_ok=True)
-        joblib.dump(knn, knn_save_dir.joinpath(f'Epoch_{epoch+1}_Accuracy_{knn_accuracy:.6f}.pkl'))
-
         if val_loss < best_loss:
             best_loss = val_loss
+            best_model = deepcopy(model)
             torch.save(model.state_dict(), save_dir.joinpath('best.pt'))
             print(f'saving best model with loss {val_loss/len(val_loader):.6f}')
-            print()
-            
-        if knn_accuracy > best_knn_accuracy:
-            best_knn_accuracy = knn_accuracy
-            joblib.dump(knn, knn_save_dir.joinpath('best_knn.pkl'))
-            print(f'saving best knn model with accuracy {knn_accuracy}')
             print()
             
         if early_stopping:
@@ -124,6 +111,23 @@ def train(model, epochs, train_loader, val_loader, train_set, test_set, device, 
             if early_stopping.early_stop:
                 print("Early stopping")
                 break
+    
+    train_embeddings, train_labels = get_all_embeddings(train_set, best_model)
+    test_embeddings, test_labels = get_all_embeddings(test_set, best_model)
+    train_labels = train_labels.squeeze(1)
+    test_labels = test_labels.squeeze(1)
+    
+    knn = KNeighborsClassifier(n_neighbors=num_classes)
+    knn.fit(train_embeddings, train_labels)
+
+    test_predictions = knn.predict(test_embeddings)
+    knn_accuracy = accuracy_calculator.get_accuracy(test_labels, test_predictions, embeddings_come_from_same_source=True)
+    print(f'KNN accuracy: {knn_accuracy}')
+    
+    knn_save_dir = save_dir.joinpath('knn')
+    knn_save_dir.mkdir(parents=True, exist_ok=True)
+    joblib.dump(knn, knn_save_dir.joinpath(f'best_knn.pkl'))
+
 
 
 def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, pretrained_weights, lr, loss_lr, seed, 
@@ -191,7 +195,7 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1000)
     loss_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(loss_optimizer, T_max=1000)
     
-    accuracy_calculator = AccuracyCalculator(include=("precision_at_1",), k=1)
+    accuracy_calculator = AccuracyCalculator(include=("precision_at_1",), k=10)
     
     if early_stop_patience:
         early_stopping = EarlyStopping(patience=early_stop_patience)
