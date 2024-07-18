@@ -55,10 +55,10 @@ def knn_inference(model, data, train_dataset, image_type, mean, std, device, top
     inference_model = InferenceModel(model, match_finder=match_finder)
     inference_model.train_knn(dataset)
 
-    if os.path.isfile(data):
+    if Path(data).is_file():
         nearest_imgs = []
         image_tensor = trans(data, select_data_transforms('train', mean, std), device)
-        distances, indices = inference_model.get_nearest_neighbors(image_tensor, top)
+        _, indices = inference_model.get_nearest_neighbors(image_tensor, top)
         for indice in indices.cpu()[0]:
             nearest_imgs.append(dataset[indice][0])
             result.append(dataset[indice][1])
@@ -66,17 +66,16 @@ def knn_inference(model, data, train_dataset, image_type, mean, std, device, top
         label = list(dataset.class_to_idx.keys())[maxlabel]
         
         if save_image_folder:
-            if not os.path.exists(os.path.join(save_image_folder, label)):
-                os.makedirs(os.path.join(save_image_folder, label))
+            Path(save_image_folder).mkdir(parents=True, exist_ok=True)
 
-            shutil.copyfile(image_path, os.path.join(save_image_folder, label, os.path.basename(image_path)))
+            shutil.copyfile(image_path, str(Path(save_image_folder).joinpath(label, Path(image_path).name)))
             if nearest_imgs:
                 imsave(make_grid(nearest_imgs), mean, std, save_image_folder, 'nearest_imgs')
-    elif os.path.isdir(data):
-        for image_path in tqdm(glob(os.path.join(data, '**', f'*.{image_type}'), recursive=True)):
+    elif Path(data).is_dir():
+        for image_path in tqdm(Path(data).rglob(f'*.{image_type}')):
             nearest_imgs = []
-            image_tensor = trans(image_path, select_data_transforms('train', mean, std), device)
-            distances, indices = inference_model.get_nearest_neighbors(image_tensor, top)
+            image_tensor = trans(str(image_path), select_data_transforms('train', mean, std), device)
+            _, indices = inference_model.get_nearest_neighbors(image_tensor, top)
             for indice in indices.cpu()[0]:
                 nearest_imgs.append(dataset[indice][0])
                 result.append(dataset[indice][1])
@@ -84,10 +83,9 @@ def knn_inference(model, data, train_dataset, image_type, mean, std, device, top
             label = list(dataset.class_to_idx.keys())[maxlabel]
             
             if save_image_folder:
-                if not os.path.exists(os.path.join(save_image_folder, label)):
-                    os.makedirs(os.path.join(save_image_folder, label))
+                Path(save_image_folder).mkdir(parents=True, exist_ok=True)
 
-                shutil.copyfile(image_path, os.path.join(save_image_folder, label, os.path.basename(image_path)))
+                shutil.copyfile(image_path, str(Path(save_image_folder).joinpath(label, Path(image_path).name)))
         if save_image_folder and nearest_imgs:
             imsave(make_grid(nearest_imgs), mean, std, save_image_folder, 'nearest_imgs')
 
