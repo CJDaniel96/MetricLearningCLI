@@ -14,7 +14,7 @@ from torchvision import transforms
 from torchvision.utils import make_grid
 from matplotlib import pyplot as plt
 from pytorch_metric_learning.distances import CosineSimilarity
-from pytorch_metric_learning.utils.inference import InferenceModel, MatchFinder, FaissKMeans
+from pytorch_metric_learning.utils.inference import InferenceModel, MatchFinder
 from utils import setup_seed, read_mean_std, select_data_transforms
 from model import EfficientArcFaceModel, DOLGModel
 

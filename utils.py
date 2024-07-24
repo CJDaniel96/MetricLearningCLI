@@ -7,6 +7,7 @@ from pathlib import Path
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
+from model import DOLGModel, EfficientArcFaceModel
 
 
 def setup_seed(seed = 42):
@@ -63,9 +64,12 @@ def save_mean_std(data_dir: Path, mean, std):
         f.write(f'std: {std}')
 
 def read_mean_std(mean_std_file: Path):
-    with mean_std_file.open('r') as f:
-        mean = eval(re.search('[\[].*[]]', f.readline())[0])
-        std = eval(re.search('[\[].*[]]', f.readline())[0])
+    if mean_std_file.exists():
+        with mean_std_file.open('r') as f:
+            mean = eval(re.search('[\[].*[]]', f.readline())[0])
+            std = eval(re.search('[\[].*[]]', f.readline())[0])
+    else:
+        raise ValueError('Mean and std file not found')
 
     return mean, std
 
@@ -76,12 +80,22 @@ def save_class_to_idx(data_dir: Path, class_to_idx):
             
 
 class EarlyStopping:
+    """
+    Early stopping class for monitoring the validation loss during training.
+    
+    Args:
+        patience (int): Number of epochs with no improvement after which training will be stopped. Default is 5.
+        min_delta (float): Minimum change in the monitored quantity to qualify as an improvement. Default is 0.
+    
+    Attributes:
+        patience (int): Number of epochs with no improvement after which training will be stopped.
+        min_delta (float): Minimum change in the monitored quantity to qualify as an improvement.
+        best_loss (float): Best validation loss achieved so far.
+        counter (int): Number of epochs with no improvement.
+        early_stop (bool): Flag indicating whether to stop training or not.
+    """
+    
     def __init__(self, patience=5, min_delta=0):
-        """
-        初始化 EarlyStopping 類別
-        :param patience: 在停止訓練之前允許的驗證損失不改善的次數
-        :param min_delta: 驗證損失改善的最小變化
-        """
         self.patience = patience
         self.min_delta = min_delta
         self.best_loss = None
@@ -90,8 +104,10 @@ class EarlyStopping:
 
     def __call__(self, val_loss):
         """
-        更新驗證損失並檢查是否應該停止訓練
-        :param val_loss: 當前的驗證損失
+        Update the best validation loss and check if training should be stopped.
+        
+        Args:
+            val_loss (float): Current validation loss.
         """
         if self.best_loss is None:
             self.best_loss = val_loss
@@ -102,3 +118,81 @@ class EarlyStopping:
             self.counter += 1
             if self.counter >= self.patience:
                 self.early_stop = True
+                
+
+class ModelFactory:
+    """
+    A factory class for creating models.
+    """
+
+    @staticmethod
+    def create_model(model_structure, model_path, embedding_size):
+        """
+        Creates a model based on the given model structure.
+
+        Args:
+            model_structure (str): The model structure to create.
+            model_path (str): The path to the model weights.
+            embedding_size (int): The size of the embedding.
+
+        Returns:
+            model: The created model.
+        """
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if model_structure == 'EfficientArcFaceModel':
+            model = EfficientArcFaceModel(embedding_size=embedding_size).to(device)
+        elif model_structure == 'DOLG':
+            model = DOLGModel(embedding_size=embedding_size).to(device)
+        else:
+            raise ValueError('Invalid model structure')
+        
+        model.load_state_dict(torch.load(model_path))
+        model.cuda()
+        model.eval()
+        
+        return model
+
+
+def load_model(model_structure, model_path, embedding_size):
+    """
+    Load a pre-trained model.
+
+    Args:
+        model_structure (str): The structure of the model to be loaded.
+        model_path (str): The path to the pre-trained model file.
+        embedding_size (int): The size of the embedding layer.
+
+    Returns:
+        model: The loaded pre-trained model.
+
+    """
+    model = ModelFactory.create_model(model_structure, model_path, embedding_size)
+    return model
+
+
+class UnNormalize(object):
+    """
+    A class to unnormalize a tensor using mean and standard deviation.
+    
+    Args:
+        mean (list or tuple): The mean values for each channel.
+        std (list or tuple): The standard deviation values for each channel.
+    """
+    
+    def __init__(self, mean, std):
+        self.mean = mean
+        self.std = std
+    
+    def __call__(self, tensor):
+        """
+        Unnormalize the given tensor.
+        
+        Args:
+            tensor (torch.Tensor): The tensor to be unnormalized.
+        
+        Returns:
+            torch.Tensor: The unnormalized tensor.
+        """
+        for t, m, s in zip(tensor, self.mean, self.std):
+            t.mul_(s).add_(m)
+        return tensor

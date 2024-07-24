@@ -1,10 +1,7 @@
 import argparse
 import json
-import faiss
-from sklearn.neighbors import KNeighborsClassifier
 import torch
 import numpy as np
-import joblib
 from copy import deepcopy
 from tqdm import tqdm
 from pathlib import Path
@@ -31,7 +28,6 @@ def get_all_embeddings(dataset, model):
 def train(model, epochs, train_loader, val_loader, train_set, test_set, device, optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, accuracy_calculator: AccuracyCalculator, num_classes, save_dir, early_stopping):
     writer = SummaryWriter(save_dir / 'logs')
     best_loss = np.inf
-    best_model = None
     for epoch in range(epochs):
         print(f'Epoch {epoch + 1}/{epochs}')
         print('-' * 10)
@@ -101,7 +97,6 @@ def train(model, epochs, train_loader, val_loader, train_set, test_set, device, 
         
         if val_loss < best_loss:
             best_loss = val_loss
-            best_model = deepcopy(model)
             torch.save(model.state_dict(), save_dir.joinpath('best.pt'))
             print(f'saving best model with loss {val_loss/len(val_loader):.6f}')
             print()
@@ -111,23 +106,6 @@ def train(model, epochs, train_loader, val_loader, train_set, test_set, device, 
             if early_stopping.early_stop:
                 print("Early stopping")
                 break
-    
-    train_embeddings, train_labels = get_all_embeddings(train_set, best_model)
-    test_embeddings, test_labels = get_all_embeddings(test_set, best_model)
-    train_labels = train_labels.squeeze(1)
-    test_labels = test_labels.squeeze(1)
-    
-    d = train_embeddings.shape[1]
-    index = faiss.IndexFlatIP(d)
-    
-    res = faiss.StandardGpuResources()
-    index = faiss.index_cpu_to_gpu(res, 0, index)
-    
-    index.add(train_embeddings)
-    faiss_index_save_dir = save_dir.joinpath('faiss')
-    faiss_index_save_dir.mkdir(parents=True, exist_ok=True)
-    faiss.write_index(faiss.index_gpu_to_cpu(index), str(faiss_index_save_dir.joinpath('faiss.index')))
-    joblib.dump(train_labels.cpu().numpy(), faiss_index_save_dir.joinpath('labels.pkl'))
 
 
 def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, pretrained_weights, lr, loss_lr, seed, 
