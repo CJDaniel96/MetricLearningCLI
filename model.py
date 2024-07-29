@@ -181,7 +181,7 @@ class OrthogonalFusion(nn.Module):
 class LocalBranch(nn.Module):
     def __init__(self, in_channel, out_channel, hidden_channel=2048, image_size=512):
         super().__init__()
-        self.multi_atrous = MultiAtrous(in_channel, hidden_channel, size=int(image_size/8))
+        self.multi_atrous = MultiAtrous(in_channel, hidden_channel, size=int(image_size/16))
         self.conv1x1_1 = nn.Conv2d(hidden_channel, out_channel, kernel_size=1)
         self.conv1x1_2 = nn.Conv2d(
             out_channel, out_channel, kernel_size=1, bias=False)
@@ -279,15 +279,14 @@ class DOLGModel(nn.Module):
             out_indices=(2, 3)
         )
         self.orthogonal_fusion = OrthogonalFusion()
-        self.local_branch = LocalBranch(64, hidden_dim, image_size=image_size)
+        self.local_branch = LocalBranch(160, hidden_dim, image_size=image_size)
         self.gap = nn.AdaptiveAvgPool2d(1)
         self.gem_pool = GeM()
-        self.fc_1 = nn.Linear(160, hidden_dim)
+        self.fc_1 = nn.Linear(64, hidden_dim)
         self.fc_2 = nn.Linear(int(2*hidden_dim), embedding_size)
         
     def forward(self, x):
         output = self.backbone(x)
-
         local_feat = self.local_branch(output[-1])  # ,hidden_channel,16,16
         global_feat = self.fc_1(self.gem_pool(output[-2]).squeeze((2, 3)))  # ,1024
         feat = self.orthogonal_fusion(local_feat, global_feat)
@@ -328,9 +327,7 @@ class MultiheadArcFaceModel(nn.Module):
         self.local_branch_conv = nn.Sequential(
             nn.Conv2d(local_in_channels, 1280, 1, 1, bias=False), 
             nn.BatchNorm2d(1280, 0.001), 
-            nn.SiLU(), 
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten()
+            nn.SiLU()
         )
         self.local_branch_attention = nn.MultiheadAttention(embed_dim=1280, num_heads=8)
         
@@ -344,11 +341,13 @@ class MultiheadArcFaceModel(nn.Module):
         )
         
         # Orthogonal fusion
-        self.fusion = nn.Linear(2560, 1280)
+        self.orthogonal_fusion = OrthogonalFusion()
         
         # Head for final embedding
         self.head = nn.Sequential(
-            nn.Linear(1280, embedding_size),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(1280*2, embedding_size),
             nn.Linear(embedding_size, embedding_size),
             nn.BatchNorm1d(embedding_size), 
             nn.ReLU()
@@ -366,24 +365,16 @@ class MultiheadArcFaceModel(nn.Module):
         """
         features = self.backbone(x)
         local_features = self.local_branch_conv(features[-1])
-        local_features = local_features.unsqueeze(0)  # Add batch dimension for attention
-        local_features = local_features.permute(2, 0, 1)  # Permute dimensions for attention
+        local_features = local_features.view(local_features.shape[0], local_features.shape[1], -1)
+        local_features = local_features.permute(2, 0, 1)
         local_features, _ = self.local_branch_attention(local_features, local_features, local_features)
-        local_features = local_features.permute(1, 2, 0)  # Permute dimensions after attention
-        local_features = local_features.squeeze(0)  # Remove batch dimension after attention
-        
+        local_features = local_features.permute(1, 2, 0)
+        local_features = local_features.view(-1, 1280, 7, 7)
         global_features = self.global_branch(features[-2])
-        
         # Orthogonal fusion
-        global_feat_norm = torch.norm(global_features, p=2, dim=1, keepdim=True)
-        projection = torch.bmm(global_features.unsqueeze(2), local_features.unsqueeze(0))
-        projection = torch.bmm(global_features.unsqueeze(1), projection).view(local_features.size())
-        projection = projection / (global_feat_norm * global_feat_norm).view(-1, 1, 1, 1)
-        orthogonal_comp = local_features - projection
-        global_features = global_features.unsqueeze(-1).unsqueeze(-1)
-        fused_features = torch.cat([global_features.expand(orthogonal_comp.size()), orthogonal_comp], dim=1)
-        
+        feat = self.orthogonal_fusion(local_features, global_features)
+
         # Final embedding
-        embedding = self.head(fused_features)
+        embedding = self.head(feat)
 
         return embedding
