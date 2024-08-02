@@ -320,8 +320,8 @@ class MultiheadArcFaceModel(nn.Module):
         # Get the output feature shapes by passing a dummy input through the backbone
         dummy_input = torch.randn(1, 3, 224, 224)  # Adjust the input size as needed
         features = self.backbone(dummy_input)
-        local_in_channels = features[-1].shape[1]
-        global_in_channels = features[-2].shape[1]
+        local_in_channels = features[-2].shape[1]
+        global_in_channels = features[-1].shape[1]
         
         # Local branch with multi-head self-attention
         self.local_branch_conv = nn.Sequential(
