@@ -369,7 +369,8 @@ class MultiheadArcFaceModel(nn.Module):
         local_features = local_features.permute(2, 0, 1)
         local_features, _ = self.local_branch_attention(local_features, local_features, local_features)
         local_features = local_features.permute(1, 2, 0)
-        local_features = local_features.view(-1, 1280, 7, 7)
+        breakpoint()
+        local_features = local_features.view(-1, 1280, 14, 14)
         global_features = self.global_branch(features[-1])
         # Orthogonal fusion
         feat = self.orthogonal_fusion(local_features, global_features)
