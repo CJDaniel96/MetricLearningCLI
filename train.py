@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 from pytorch_metric_learning import losses, testers
 from pytorch_metric_learning.utils.accuracy_calculator import AccuracyCalculator
 from model import DOLGModel, EfficientArcFaceModel, MultiheadArcFaceModel
-from utils import EarlyStopping, setup_seed, select_data_transforms, get_mean_std, save_mean_std, save_class_to_idx, read_mean_std
+from utils import EarlyStopping, setup_seed, create_dataloader, get_mean_std, save_mean_std, save_class_to_idx, read_mean_std
 
 
 def history_record(opt):
@@ -108,15 +108,15 @@ def train(model, epochs, train_loader, val_loader, train_set, test_set, device, 
                 break
 
 
-def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, pretrained_weights, lr, loss_lr, seed, 
+def main(data_dir, epochs, batch_size, num_classes, image_size, num_workers, embedding_size, pretrained_weights, lr, loss_lr, seed, 
          model_structure, loss_structure, optimizer_selection, early_stop_patience, save_dir):
     setup_seed(seed)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Device: {device}')
     
-    data_dir = Path(data_dir)
-    save_dir = Path(save_dir)
+    data_dir = Path('\\\\?\\').joinpath(data_dir)
+    save_dir = Path('\\\\?\\').joinpath(save_dir)
 
     if data_dir.joinpath('mean_std.txt').exists():
         mean, std = read_mean_std(data_dir.joinpath('mean_std.txt'))
@@ -124,10 +124,8 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, embedding_size, 
         mean, std = get_mean_std(data_dir, batch_size)
         save_mean_std(data_dir, mean, std)
 
-    train_dataset = ImageFolder(str(data_dir.joinpath('train')) , select_data_transforms('train', mean, std, image_size=image_size))
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-    val_dataset = ImageFolder(str(data_dir.joinpath('val')), select_data_transforms('train', mean, std, image_size=image_size))
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
+    train_loader, train_dataset = create_dataloader(str(data_dir.joinpath('train')), 'train', image_size, batch_size, True, num_workers, seed, mean, std, drop_last=True)
+    val_loader, val_dataset = create_dataloader(str(data_dir.joinpath('val')), 'train', image_size, batch_size, False, num_workers, seed, mean, std)
 
     print(f'class_to_idx: {train_dataset.class_to_idx}')
     save_class_to_idx(data_dir, train_dataset.class_to_idx)
@@ -196,6 +194,7 @@ def parse_opt():
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--num-classes', type=int, default=2)
     parser.add_argument('--image-size', type=int, default=224)
+    parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--embedding-size', type=int, default=128)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--early-stop-patience', type=int, default=3)

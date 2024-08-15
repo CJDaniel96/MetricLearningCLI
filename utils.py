@@ -29,14 +29,12 @@ def select_data_transforms(mode='default', mean=[0.485, 0.456, 0.406], std=[0.22
     assert mode in ['default', 'train'], 'mode is not validated'
     if mode == 'default':
         return transforms.Compose([
-            transforms.Resize((image_size, image_size)), 
-            # transforms.CenterCrop((224, 224)), 
+            transforms.Resize((image_size, image_size)),
             transforms.ToTensor()
         ])
     elif mode == 'train':
         return transforms.Compose([
-            transforms.Resize((image_size, image_size)), 
-            # transforms.CenterCrop((224, 224)), 
+            transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),
             transforms.Normalize(mean, std)
         ])
@@ -169,6 +167,22 @@ def load_model(model_structure, model_path, embedding_size):
     model = ModelFactory.create_model(model_structure, model_path, embedding_size)
     return model
 
+def seed_worker(worker_id):
+    # Set dataloader worker seed https://pytorch.org/docs/stable/notes/randomness.html#dataloader
+    worker_seed = torch.initial_seed() % 2 ** 32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+def create_dataloader(path, dataset_mode='default', imgsz=224, batch_size=8, shuffle=True, num_workers=8, seed=42, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], drop_last=False):
+    transform = select_data_transforms(dataset_mode, mean, std, imgsz)
+    dataset = ImageFolder(path, transform)
+    batch_size = min(batch_size, len(dataset))
+    nd = torch.cuda.device_count()  # number of CUDA devices
+    nw = min([os.cpu_count() // max(nd, 1), batch_size if batch_size > 1 else 0, num_workers])  # number of workers
+    generator = torch.Generator()
+    generator.manual_seed(6148914691236517205 + seed)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=nw, pin_memory=True, worker_init_fn=seed_worker, generator=generator, drop_last=drop_last), dataset
+    
 
 class UnNormalize(object):
     """
