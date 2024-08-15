@@ -115,8 +115,8 @@ def main(data_dir, epochs, batch_size, num_classes, image_size, num_workers, emb
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Device: {device}')
     
-    data_dir = Path('\\\\?\\').joinpath(data_dir)
-    save_dir = Path('\\\\?\\').joinpath(save_dir)
+    data_dir = Path('\\\\?\\' + data_dir)
+    save_dir = Path('\\\\?\\' + save_dir)
 
     if data_dir.joinpath('mean_std.txt').exists():
         mean, std = read_mean_std(data_dir.joinpath('mean_std.txt'))
