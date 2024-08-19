@@ -25,7 +25,8 @@ def main(opt):
     if Path(opt.dataset_pkl).exists():
         dataset = joblib.load(opt.dataset_pkl)
     elif Path(opt.dataset_folder).exists():
-        dataset = ImageFolder(opt.dataset_folder, select_data_transforms('train', mean, std))
+        dataset_folder = Path(f'\\\\?\\{opt.dataset_folder}')
+        dataset = ImageFolder(dataset_folder, select_data_transforms('train', mean, std))
     else:
         raise ValueError('Dataset not found')
     match_finder = MatchFinder(distance=CosineSimilarity(), threshold=opt.threshold)
@@ -37,6 +38,7 @@ def main(opt):
         dataset_pkl_path = Path(opt.save_path).parent / 'dataset.pkl'
         joblib.dump(dataset, str(dataset_pkl_path))
     else:
+        Path(opt.save_path).mkdir(parents=True, exist_ok=True)
         save_path = Path(opt.save_path) / 'knn_func.index'
         dataset_pkl_path = Path(opt.save_path) / 'dataset.pkl'
         knn.save_knn_func(str(save_path))
