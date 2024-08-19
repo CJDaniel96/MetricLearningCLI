@@ -7,7 +7,7 @@ from pathlib import Path
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
-from model import DOLGModel, EfficientArcFaceModel
+from model import DOLGModel, EfficientArcFaceModel, MultiheadArcFaceModel
 
 
 def setup_seed(seed = 42):
@@ -138,9 +138,11 @@ class ModelFactory:
         """
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         if model_structure == 'EfficientArcFaceModel':
-            model = EfficientArcFaceModel(embedding_size=embedding_size).to(device)
-        elif model_structure == 'DOLG':
-            model = DOLGModel(embedding_size=embedding_size).to(device)
+            model = EfficientArcFaceModel(pretrained=False, embedding_size=embedding_size).to(device)
+        elif model_structure == 'DOLG' or model_structure == 'DOLGModel':
+            model = DOLGModel(pretrained=False, embedding_size=embedding_size).to(device)
+        elif model_structure == 'MultiheadArcFaceModel':
+            model = MultiheadArcFaceModel(pretrained=False, embedding_size=embedding_size).to(device)
         else:
             raise ValueError('Invalid model structure')
         
