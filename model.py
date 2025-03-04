@@ -296,23 +296,23 @@ class DOLGModel(nn.Module):
         return feat
     
 
-class MultiheadArcFaceModel(nn.Module):
+class MLGModel(nn.Module):
     """
-    EfficientArcFaceModel class for extracting features using EfficientNetV2 and applying ArcFace.
+    MLGModel class for extracting features using EfficientNetV2.
 
     Attributes:
         backbone (torch.nn.Module): EfficientNetV2 model for feature extraction.
         local_branch (torch.nn.Module): Multi-head self-attention for local features.
         global_branch (torch.nn.Module): Global feature extraction.
         fusion (torch.nn.Module): Orthogonal fusion of local and global features.
-        head (torch.nn.Module): Head layers for ArcFace.
+        head (torch.nn.Module): Head layers.
 
     Methods:
         forward(x): Forward pass of the model.
     """
     def __init__(self, model_name='tf_efficientnetv2_s', pretrained=True, features_only=True, embedding_size=128) -> None:
         """
-        Initialize the EfficientArcFaceModel instance.
+        Initialize the MLGModel instance.
         """
         super().__init__()
         self.backbone = timm.create_model(model_name, pretrained=pretrained, features_only=features_only)
