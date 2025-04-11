@@ -58,7 +58,7 @@ class EfficientArcFaceModel(nn.Module):
         forward(x): Forward pass of the model.
 
     """
-    def __init__(self, model_name='tf_efficientnetv2_s', pretrained=True, features_only=True, embedding_size=128) -> None:
+    def __init__(self, model_name='efficientnetv2_s', pretrained=True, features_only=True, embedding_size=128) -> None:
         """
         Initialize the EfficientArcFaceModel instance.
         """
@@ -310,7 +310,7 @@ class MLGModel(nn.Module):
     Methods:
         forward(x): Forward pass of the model.
     """
-    def __init__(self, model_name='tf_efficientnetv2_s', pretrained=True, features_only=True, embedding_size=128) -> None:
+    def __init__(self, model_name='efficientnetv2_s', pretrained=False, features_only=True, embedding_size=128) -> None:
         """
         Initialize the MLGModel instance.
         """

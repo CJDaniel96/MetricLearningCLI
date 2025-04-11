@@ -1,7 +1,7 @@
 import argparse
 import joblib
 from pathlib import Path
-from utils import read_mean_std, select_data_transforms, load_model
+from utils import DataStatistics, DataTransformFactory, load_model
 from torchvision.datasets import ImageFolder
 from pytorch_metric_learning.distances import CosineSimilarity
 from pytorch_metric_learning.utils.inference import InferenceModel, MatchFinder
@@ -21,12 +21,12 @@ def main(opt):
         None
     """
     model = load_model(opt.model_structure, opt.model_path, opt.embedding_size)
-    mean, std = read_mean_std(Path(opt.mean_std_file))
+    mean, std = DataStatistics.get_mean_std(Path(opt.dataset_folder))
     if Path(opt.dataset_pkl).exists():
         dataset = joblib.load(opt.dataset_pkl)
     elif Path(opt.dataset_folder).exists():
         dataset_folder = Path(f'\\\\?\\{opt.dataset_folder}')
-        dataset = ImageFolder(dataset_folder, select_data_transforms('train', mean, std))
+        dataset = ImageFolder(dataset_folder, DataTransformFactory.create_transform('train', mean, std))
     else:
         raise ValueError('Dataset not found')
     match_finder = MatchFinder(distance=CosineSimilarity(), threshold=opt.threshold)
@@ -75,7 +75,6 @@ def parse_opt(known=False):
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset-folder', type=str, default='data')
     parser.add_argument('--dataset-pkl', type=str, default='dataset.pkl')
-    parser.add_argument('--mean-std-file', type=str, default='mean_std.txt')
     parser.add_argument('--model-path', type=str, default='model')
     parser.add_argument('--threshold', type=float, default=0.5)
     parser.add_argument('--model-structure', type=str, default='EfficientArcFaceModel')

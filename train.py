@@ -1,210 +1,422 @@
-import argparse
 import json
 import torch
-import numpy as np
-from copy import deepcopy
-from tqdm import tqdm
+import pandas as pd
+import os
+from dataclasses import dataclass
+from typing import Optional, Tuple, Dict
 from pathlib import Path
-from torchvision.datasets import ImageFolder
-from torch.utils.data import DataLoader
+from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
-from pytorch_metric_learning import losses, testers
+from pytorch_metric_learning import losses
 from pytorch_metric_learning.utils.accuracy_calculator import AccuracyCalculator
-from model import DOLGModel, EfficientArcFaceModel, MultiheadArcFaceModel
-from utils import EarlyStopping, setup_seed, create_dataloader, get_mean_std, save_mean_std, save_class_to_idx, read_mean_std
+from sklearn.metrics import silhouette_score
+from model import DOLGModel, EfficientArcFaceModel, MLGModel
+from utils import EarlyStopping, setup_seed, create_dataloader, DataStatistics, save_class_to_idx, get_embeddings, plot_bar_chart, plot_silhouette_distribution, get_classes_threshold
 
 
-def history_record(opt):
-    save_dir = Path(opt.save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-    json_object = json.dumps(vars(opt))
-    with save_dir.joinpath('history.json').open('w') as outfile:
-        outfile.write(json_object)
+@dataclass
+class TrainingConfig:
+    """Configuration class for training parameters."""
+    data_dir: str
+    save_dir: str
+    epochs: int = 40
+    batch_size: int = 64
+    image_size: int = 224
+    num_classes: int = None
+    num_workers: int = 4
+    embedding_size: int = 128
+    learning_rate: float = 1e-3
+    loss_learning_rate: float = 1e-4
+    seed: int = 0
+    early_stop_patience: Optional[int] = 3
+    pretrained_weights: Optional[str] = None
+    model_type: str = "EfficientArcFaceModel"
+    loss_type: str = "SubCenterArcFaceLoss"
+    optimizer_type: str = "Adam"
 
-def get_all_embeddings(dataset, model):
-    tester = testers.BaseTester()
-    return tester.get_all_embeddings(dataset, model)
+    def save_config(self) -> None:
+        """Save the training configuration to a JSON file.
 
-def train(model, epochs, train_loader, val_loader, train_set, test_set, device, optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, accuracy_calculator: AccuracyCalculator, num_classes, save_dir, early_stopping):
-    writer = SummaryWriter(save_dir / 'logs')
-    best_loss = np.inf
-    for epoch in range(epochs):
-        print(f'Epoch {epoch + 1}/{epochs}')
-        print('-' * 10)
+        The configuration is written to 'opts.json' in the save directory.
+        """
+        save_path = Path(self.save_dir)
+        save_path.mkdir(parents=True, exist_ok=True)
+        with save_path.joinpath('opts.json').open('w') as file:
+            json.dump(self.__dict__, file, indent=2)
 
-        train_loss = 0.0
-        val_loss = 0.0
+class ModelFactory:
+    """Factory class for creating model and loss instances."""
+    
+    @staticmethod
+    def create_model(config: TrainingConfig, device: str) -> torch.nn.Module:
+        """Create a model instance based on the configuration.
 
-        # training
-        model.train()  # set the model to training mode
-        for inputs, labels in tqdm(train_loader):
-            inputs = inputs.to(device)
-            labels = labels.to(device)
+        Args:
+            config: TrainingConfig object containing model parameters.
+            device: The device to place the model on (e.g., 'cuda' or 'cpu').
 
-            optimizer.zero_grad()
-            loss_optimizer.zero_grad()
-            embeddings = model(inputs)
-            loss = criterion(embeddings, labels)
-            loss.backward()
-            optimizer.step()
-            loss_optimizer.step()
-            scheduler.step()
-            loss_scheduler.step()
+        Returns:
+            A PyTorch model instance.
 
-            train_loss += loss.item()
-
-        # validation
-        model.eval()  # set the model to evaluation mode
-        with torch.no_grad():
-            for inputs, labels in tqdm(val_loader):
-                inputs = inputs.to(device)
-                labels = labels.to(device)
-
-                embeddings = model(inputs)
-                loss = criterion(embeddings, labels)
-
-                val_loss += loss.item()
-
-        print(
-            f'[{epoch + 1:03d}/{epochs:03d}]',
-            f'Train Loss: {train_loss/len(train_loader):3.6f}',
-            f'| Val Loss: {val_loss/len(val_loader):3.6f}'
-        )
+        Raises:
+            ValueError: If the model type is not supported.
+        """
+        model_classes = {
+            "EfficientArcFaceModel": EfficientArcFaceModel,
+            "DOLGModel": DOLGModel,
+            "MLGModel": MLGModel
+        }
         
-        train_embeddings, train_labels = get_all_embeddings(train_set, model)
-        test_embeddings, test_labels = get_all_embeddings(test_set, model)
-        train_labels = train_labels.squeeze(1)
-        test_labels = test_labels.squeeze(1)
-        print("Computing accuracy")
-        accuracies = accuracy_calculator.get_accuracy(
-            query=test_embeddings, 
-            query_labels=test_labels, 
-            reference=train_embeddings, 
-            reference_labels=train_labels, 
-            embeddings_come_from_same_source=False
-        )
-        print("Test set accuracy (Precision@1) = {}".format(accuracies["precision_at_1"]))
-        print()
-        
-        writer.add_scalar('Loss/train', train_loss/len(train_loader), epoch + 1)
-        writer.add_scalar('Loss/val', val_loss/len(val_loader), epoch + 1)
-        writer.add_scalar('Accuracy/precision_at_1', accuracies["precision_at_1"], epoch + 1)
+        model_class = model_classes.get(config.model_type)
+        if not model_class:
+            raise ValueError(f"Unsupported model type: {config.model_type}")
 
-        torch.save(
-            model.state_dict(),
-            str(save_dir.joinpath(f'Epoch_{epoch+1}_Loss_{train_loss/len(train_loader):.6f}.pt'))
-        )
+        model_params = {"embedding_size": config.embedding_size}
+        if config.model_type == "DOLGModel":
+            model_params["image_size"] = config.image_size
+
+        model = model_class(**model_params).to(device)
         
-        if val_loss < best_loss:
-            best_loss = val_loss
-            torch.save(model.state_dict(), save_dir.joinpath('best.pt'))
-            print(f'saving best model with loss {val_loss/len(val_loader):.6f}')
-            print()
+        if config.pretrained_weights:
+            model.load_state_dict(torch.load(config.pretrained_weights))
+        
+        return model
+
+    @staticmethod
+    def create_loss(config: TrainingConfig, device: str) -> torch.nn.Module:
+        """Create a loss function instance based on the configuration.
+
+        Args:
+            config: TrainingConfig object containing loss parameters.
+            device: The device to place the loss function on (e.g., 'cuda' or 'cpu').
+
+        Returns:
+            A PyTorch loss function instance.
+
+        Raises:
+            ValueError: If the loss type is not supported.
+        """
+        loss_classes = {
+            "SubCenterArcFaceLoss": losses.SubCenterArcFaceLoss,
+            "ArcFaceLoss": losses.ArcFaceLoss
+        }
+        
+        loss_class = loss_classes.get(config.loss_type)
+        if not loss_class:
+            raise ValueError(f"Unsupported loss type: {config.loss_type}")
             
-        if early_stopping:
-            early_stopping(val_loss)
-            if early_stopping.early_stop:
-                print("Early stopping")
+        return loss_class(
+            num_classes=config.num_classes,
+            embedding_size=config.embedding_size
+        ).to(device)
+
+class Trainer:
+    """Class responsible for managing the training process."""
+    
+    def __init__(self, config: TrainingConfig, device: str):
+        """Initialize the Trainer with configuration and device.
+
+        Args:
+            config: TrainingConfig object with training parameters.
+            device: The device to use for training (e.g., 'cuda' or 'cpu').
+        """
+        self.config = config
+        self.device = device
+        self.save_dir = Path(config.save_dir)
+        self.writer = SummaryWriter(self.save_dir / 'logs')
+        if os.name == 'nt' and len(config.data_dir) > 260:
+            print("Warning: Data Directory Path length exceeds 260 characters. Consider enabling long path support on Windows.")
+        self.data_dir = Path(config.data_dir)
+        if os.name == 'nt' and len(config.save_dir) > 260:
+            print("Warning: Save Directory Path length exceeds 260 characters. Consider enabling long path support on Windows.")
+        self._setup_training()
+
+    def _setup_training(self) -> None:
+        """Set up the training environment, including data loaders and model components."""
+        setup_seed(self.config.seed)
+        
+        mean, std = DataStatistics.get_mean_std(self.data_dir, self.config.batch_size)
+        self.train_loader, self.train_dataset = create_dataloader(
+            str(self.data_dir / 'train'), 'train', self.config.image_size,
+            self.config.batch_size, True, self.config.num_workers,
+            self.config.seed, mean, std, drop_last=True
+        )
+        self.val_loader, self.val_dataset = create_dataloader(
+            str(self.data_dir / 'val'), 'train', self.config.image_size,
+            self.config.batch_size, False, self.config.num_workers,
+            self.config.seed, mean, std
+        )
+        self.config.num_classes = len(self.train_dataset.classes)
+        save_class_to_idx(self.data_dir, self.train_dataset.class_to_idx)
+
+        self.model = ModelFactory.create_model(self.config, self.device)
+        self.criterion = ModelFactory.create_loss(self.config, self.device)
+        self.optimizer, self.loss_optimizer = self._create_optimizers()
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=1000)
+        self.loss_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.loss_optimizer, T_max=1000)
+        self.accuracy_calculator = AccuracyCalculator(include=('AMI', 'mean_average_precision', 'mean_reciprocal_rank', 'precision_at_1'), k=10)
+        self.early_stopping = EarlyStopping(patience=self.config.early_stop_patience) \
+            if self.config.early_stop_patience else None
+
+    def _create_optimizers(self) -> Tuple[torch.optim.Optimizer, torch.optim.Optimizer]:
+        """Create optimizers for the model and loss function.
+
+        Returns:
+            A tuple of two optimizers: one for the model and one for the loss function.
+
+        Raises:
+            ValueError: If the optimizer type is not supported.
+        """
+        optimizers = {
+            "Adam": lambda params, lr: torch.optim.Adam(params, lr=lr),
+            "SGD": lambda params, lr: torch.optim.SGD(params, lr=lr, momentum=0.9, weight_decay=1e-5)
+        }
+        
+        optimizer_class = optimizers.get(self.config.optimizer_type)
+        if not optimizer_class:
+            raise ValueError(f"Unsupported optimizer: {self.config.optimizer_type}")
+            
+        return (
+            optimizer_class(self.model.parameters(), self.config.learning_rate),
+            optimizer_class(self.criterion.parameters(), self.config.loss_learning_rate)
+        )
+
+    def train(self) -> None:
+        """Execute the training loop."""
+        best_loss = float('inf')
+        
+        for epoch in range(self.config.epochs):
+            print(f'Epoch {epoch + 1}/{self.config.epochs}')
+            print('-' * 10)
+
+            train_loss = self._train_epoch()
+            val_loss = self._validate_epoch()
+            self._log_metrics(epoch, train_loss, val_loss, False)
+            
+            if val_loss < best_loss:
+                best_loss = val_loss
+                self._save_model('best.pt', val_loss)
+                self._log_metrics(epoch, train_loss, val_loss, True)
+                
+            self._save_checkpoint(epoch, train_loss)
+            
+            if self._should_early_stop(val_loss):
                 break
 
+    def _train_epoch(self) -> float:
+        """Train the model for one epoch.
 
-def main(data_dir, epochs, batch_size, num_classes, image_size, num_workers, embedding_size, pretrained_weights, lr, loss_lr, seed, 
-         model_structure, loss_structure, optimizer_selection, early_stop_patience, save_dir):
-    setup_seed(seed)
-
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f'Device: {device}')
-    
-    data_dir = Path('\\\\?\\' + data_dir)
-    save_dir = Path('\\\\?\\' + save_dir)
-
-    if data_dir.joinpath('mean_std.txt').exists():
-        mean, std = read_mean_std(data_dir.joinpath('mean_std.txt'))
-    else:
-        mean, std = get_mean_std(data_dir, batch_size)
-        save_mean_std(data_dir, mean, std)
-
-    train_loader, train_dataset = create_dataloader(str(data_dir.joinpath('train')), 'train', image_size, batch_size, True, num_workers, seed, mean, std, drop_last=True)
-    val_loader, val_dataset = create_dataloader(str(data_dir.joinpath('val')), 'train', image_size, batch_size, False, num_workers, seed, mean, std)
-
-    print(f'class_to_idx: {train_dataset.class_to_idx}')
-    save_class_to_idx(data_dir, train_dataset.class_to_idx)
-
-    if model_structure == 'EfficientArcFaceModel':
-        if pretrained_weights:
-            model = EfficientArcFaceModel(embedding_size=embedding_size, pretrained=False).to(device)
-            model.load_state_dict(torch.load(pretrained_weights))
-            model.cuda()
-        else:
-            model = EfficientArcFaceModel(embedding_size=embedding_size).to(device)
-    elif model_structure == 'DOLGModel':
-        if pretrained_weights:
-            model = DOLGModel(embedding_size=embedding_size, image_size=image_size, pretrained=False).to(device)
-            model.load_state_dict(torch.load(pretrained_weights))
-            model.cuda()
-        else:
-            model = DOLGModel(embedding_size=embedding_size, image_size=image_size).to(device)
-    elif model_structure == 'MultiheadArcFaceModel':
-        if pretrained_weights:
-            model = MultiheadArcFaceModel(embedding_size=embedding_size, pretrained=False).to(device)
-            model.load_state_dict(torch.load(pretrained_weights))
-            model.cuda()
-        else:
-            model = MultiheadArcFaceModel(embedding_size=embedding_size).to(device)
-    else:
-        raise ValueError('model_structure not supported')
-
-    if loss_structure == 'SubCenterArcFaceLoss':
-        criterion = losses.SubCenterArcFaceLoss(num_classes=num_classes, embedding_size=embedding_size).to(device)
-    elif loss_structure == 'ArcFaceLoss':
-        criterion = losses.ArcFaceLoss(num_classes=num_classes, embedding_size=embedding_size).to(device)
-    else:
-        raise ValueError('loss_structure not supported')
-    
-    if optimizer_selection == 'Adam':
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        loss_optimizer = torch.optim.Adam(criterion.parameters(), lr=loss_lr)
-    elif optimizer_selection == 'SGD':
-        optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-5)
-        loss_optimizer = torch.optim.SGD(criterion.parameters(), lr=loss_lr, momentum=0.9, weight_decay=1e-5)
+        Returns:
+            The average training loss for the epoch.
+        """
+        self.model.train()
+        total_loss = 0.0
         
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1000)
-    loss_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(loss_optimizer, T_max=1000)
-    
-    accuracy_calculator = AccuracyCalculator(include=("precision_at_1",), k=10)
-    
-    if early_stop_patience:
-        early_stopping = EarlyStopping(patience=early_stop_patience)
-    else:
-        early_stopping = None
-    
-    train(model, epochs, train_loader, val_loader, train_dataset, val_dataset, device, optimizer, loss_optimizer, scheduler, loss_scheduler, criterion, accuracy_calculator, num_classes, save_dir, early_stopping)
+        for inputs, labels in tqdm(self.train_loader):
+            inputs, labels = inputs.to(self.device), labels.to(self.device)
+            
+            self.optimizer.zero_grad()
+            self.loss_optimizer.zero_grad()
+            
+            embeddings = self.model(inputs)
+            loss = self.criterion(embeddings, labels)
+            loss.backward()
+            
+            self.optimizer.step()
+            self.loss_optimizer.step()
+            self.scheduler.step()
+            self.loss_scheduler.step()
+            
+            total_loss += loss.item()
+            
+        return total_loss / len(self.train_loader)
 
+    def _validate_epoch(self) -> float:
+        """Validate the model for one epoch.
 
-def parse_opt():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--data-dir', default='')
-    parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--pretrained-weights', type=str, default='')
-    parser.add_argument('--model-structure', type=str, default='EfficientArcFaceModel')
-    parser.add_argument('--loss-structure', type=str, default='SubCenterArcFaceLoss')
-    parser.add_argument('--optimizer-selection', type=str, default='Adam')
-    parser.add_argument('--loss-lr', type=float, default=1e-4)
+        Returns:
+            The average validation loss for the epoch.
+        """
+        self.model.eval()
+        total_loss = 0.0
+        
+        with torch.no_grad():
+            for inputs, labels in tqdm(self.val_loader):
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                embeddings = self.model(inputs)
+                total_loss += self.criterion(embeddings, labels).item()
+                
+        return total_loss / len(self.val_loader)
+
+    def _log_metrics(self, epoch: int, train_loss: float, val_loss: float, best_model: bool = False) -> None:
+        """Log training metrics and save them to CSV and visualizations.
+
+        Args:
+            epoch: The current epoch number (0-based).
+            train_loss: The average training loss for the epoch.
+            val_loss: The average validation loss for the epoch.
+        """
+        train_embeddings, train_labels = get_embeddings(self.train_dataset, self.model)
+        val_embeddings, val_labels = get_embeddings(self.val_dataset, self.model)
+        
+        accuracies = self.accuracy_calculator.get_accuracy(
+            query=val_embeddings,
+            query_labels=val_labels.squeeze(1),
+            reference=train_embeddings,
+            reference_labels=train_labels.squeeze(1)
+        )
+        
+        silhouette_scores = silhouette_score(val_embeddings.cpu().numpy(), val_labels.cpu().numpy())
+        
+        metrics_data = {
+            'Epoch': epoch + 1,
+            'Train_Loss': train_loss,
+            'Val_Loss': val_loss,
+            'Silhouette_Score': silhouette_scores
+        }
+        
+        metrics_data.update(accuracies)
+        
+        if not best_model:
+            self._save_metrics_to_csv(metrics_data)
+                
+            print(f'[{epoch + 1:03d}/{self.config.epochs:03d}] '
+                f'Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}')
+            
+            self.writer.add_scalar('Loss/train', train_loss, epoch + 1)
+            self.writer.add_scalar('Loss/val', val_loss, epoch + 1)
+            for metric, value in accuracies.items():
+                self.writer.add_scalar(f'Accuracy/{metric}', value, epoch + 1)
+                print(f'{metric}: {value:.4f}')
+            print(f"Silhouette Score: {silhouette_scores:.4f}")
+        
+        if best_model:
+            plot_bar_chart(
+                list(accuracies.values()), 
+                list(accuracies.keys()), 
+                "Metric Learning Evaluation", 
+                "Score", 
+                self.save_dir / "metrics_bar_chart.png"
+            )
+            
+            plot_silhouette_distribution(
+                [silhouette_scores], 
+                self.save_dir / "silhouette_distribution.png"
+            )
+            
+            df_thresholds, df_cross_stats = get_classes_threshold(self.val_dataset, self.model, self.save_dir / "thresholds")
+            
+            print("Within-class stats:\n", df_thresholds)
+            print("Cross-class mean:\n", df_cross_stats["mean"])
+            print("Cross-class max:\n", df_cross_stats["max"])
+            print("Cross-class min:\n", df_cross_stats["min"])
+
+    def _save_thresholds_to_json(self, thresholds_data: Dict[str, float], thresholds_file: str, folder_name: str = "thresholds") -> None:
+        """Save class-specific thresholds to a JSON file.
+
+        Args:
+            thresholds_data: Dictionary mapping class IDs to their thresholds.
+            thresholds_file: Name of the file to save thresholds to.
+            folder_name: Subdirectory name within data_dir to store thresholds (default: 'thresholds').
+        """
+        json_path = self.save_dir / folder_name / thresholds_file
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(json_path, 'w') as f:
+            json.dump(thresholds_data, f, indent=2)
+        
+    def _save_metrics_to_csv(self, metrics_data: Dict[str, float]) -> None:
+        """Save training metrics to a CSV file.
+
+        Args:
+            metrics_data: Dictionary containing metrics for the current epoch.
+        """
+        csv_path = self.save_dir / "training_metrics.csv"
+        
+        df = pd.DataFrame([metrics_data])
+        
+        if csv_path.exists():
+            existing_df = pd.read_csv(csv_path)
+            updated_df = pd.concat([existing_df, df], ignore_index=True)
+            updated_df.to_csv(csv_path, index=False)
+        else:
+            df.to_csv(csv_path, index=False)
+
+    def _save_model(self, filename: str, loss: float) -> None:
+        """Save the model state to a file.
+
+        Args:
+            filename: Name of the file to save the model to.
+            loss: The validation loss associated with this model save.
+        """
+        torch.save(self.model.state_dict(), self.save_dir / filename)
+        print(f'Saving model with loss {loss/len(self.val_loader):.6f}\n')
+
+    def _save_checkpoint(self, epoch: int, train_loss: float) -> None:
+        """Save a checkpoint of the model state.
+
+        Args:
+            epoch: The current epoch number (0-based).
+            train_loss: The average training loss for the epoch.
+        """
+        checkpoint_path = self.save_dir / f'Epoch_{epoch+1}_Loss_{train_loss:.6f}.pt'
+        torch.save(self.model.state_dict(), str(checkpoint_path))
+
+    def _should_early_stop(self, val_loss: float) -> bool:
+        """Check if training should stop early based on validation loss.
+
+        Args:
+            val_loss: The validation loss for the current epoch.
+
+        Returns:
+            True if early stopping is triggered, False otherwise.
+        """
+        if self.early_stopping:
+            self.early_stopping(val_loss)
+            if self.early_stopping.early_stop:
+                print("Early stopping triggered")
+                return True
+        return False
+
+def parse_arguments() -> TrainingConfig:
+    """Parse command-line arguments and return a TrainingConfig object.
+
+    Returns:
+        A TrainingConfig instance populated with parsed arguments.
+    """
+    import argparse
+    parser = argparse.ArgumentParser(description='Model Training Configuration')
+    
+    parser.add_argument('--data-dir', required=True, help='Dataset directory')
+    parser.add_argument('--save-dir', required=True, help='Save directory')
     parser.add_argument('--epochs', type=int, default=40)
     parser.add_argument('--batch-size', type=int, default=64)
-    parser.add_argument('--num-classes', type=int, default=2)
+    parser.add_argument('--num-classes', type=int, default=None)
     parser.add_argument('--image-size', type=int, default=224)
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--embedding-size', type=int, default=128)
+    parser.add_argument('--learning-rate', type=float, default=1e-3)
+    parser.add_argument('--loss-learning-rate', type=float, default=1e-4)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--early-stop-patience', type=int, default=3)
-    parser.add_argument('--save-dir', default='')
-    opt = parser.parse_args()
+    parser.add_argument('--pretrained-weights', type=str, default=None)
+    parser.add_argument('--model-type', default='EfficientArcFaceModel')
+    parser.add_argument('--loss-type', default='SubCenterArcFaceLoss')
+    parser.add_argument('--optimizer-type', default='Adam')
+    
+    args = parser.parse_args()
+    return TrainingConfig(**vars(args))
 
-    return opt
-
+def main():
+    """Main function to execute the training process."""
+    config = parse_arguments()
+    config.save_config()
+    
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f'Using device: {device}')
+    
+    trainer = Trainer(config, device)
+    trainer.train()
 
 if __name__ == '__main__':
-    opt = parse_opt()
-    history_record(opt)
-    main(**vars(opt))
+    main()

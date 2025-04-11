@@ -7,7 +7,6 @@ import shutil
 import cv2
 from PIL import Image
 from pathlib import Path
-from glob import glob
 from tqdm import tqdm
 from torchvision.datasets import ImageFolder
 from torchvision import transforms
@@ -15,8 +14,8 @@ from torchvision.utils import make_grid
 from matplotlib import pyplot as plt
 from pytorch_metric_learning.distances import CosineSimilarity
 from pytorch_metric_learning.utils.inference import InferenceModel, MatchFinder
-from utils import setup_seed, read_mean_std, select_data_transforms
-from model import EfficientArcFaceModel, DOLGModel
+from utils import setup_seed, DataTransformFactory, DataStatistics
+from model import EfficientArcFaceModel, DOLGModel, MLGModel
 
 
 def imsave(img, mean, std, save_image_folder, title, figsize=(8, 4)):
@@ -50,14 +49,14 @@ def inference(model, image_path, data_transforms, device):
 
 def knn_inference(model, data, train_dataset, image_type, mean, std, device, top, save_image_folder):
     result = []
-    dataset = ImageFolder(train_dataset, select_data_transforms('train', mean, std))
+    dataset = ImageFolder(train_dataset, DataTransformFactory.create_transform('train', mean, std))
     match_finder = MatchFinder(distance=CosineSimilarity(), threshold=0.9)
     inference_model = InferenceModel(model, match_finder=match_finder)
     inference_model.train_knn(dataset)
 
     if Path(data).is_file():
         nearest_imgs = []
-        image_tensor = trans(data, select_data_transforms('train', mean, std), device)
+        image_tensor = trans(data, DataTransformFactory.create_transform('train', mean, std), device)
         _, indices = inference_model.get_nearest_neighbors(image_tensor, top)
         for indice in indices.cpu()[0]:
             nearest_imgs.append(dataset[indice][0])
@@ -65,16 +64,17 @@ def knn_inference(model, data, train_dataset, image_type, mean, std, device, top
         maxlabel = max(result, key=result.count)
         label = list(dataset.class_to_idx.keys())[maxlabel]
         
+        print(f'Nearest Neighbor is {label}')
+        
         if save_image_folder:
-            Path(save_image_folder).mkdir(parents=True, exist_ok=True)
-
-            shutil.copyfile(image_path, str(Path(save_image_folder).joinpath(label, Path(image_path).name)))
+            Path(save_image_folder, label).mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(data, str(Path(save_image_folder).joinpath(label, Path(data).name)))
             if nearest_imgs:
                 imsave(make_grid(nearest_imgs), mean, std, save_image_folder, 'nearest_imgs')
     elif Path(data).is_dir():
         for image_path in tqdm(Path(data).rglob(f'*.{image_type}')):
             nearest_imgs = []
-            image_tensor = trans(str(image_path), select_data_transforms('train', mean, std), device)
+            image_tensor = trans(str(image_path), DataTransformFactory.create_transform('train', mean, std), device)
             _, indices = inference_model.get_nearest_neighbors(image_tensor, top)
             for indice in indices.cpu()[0]:
                 nearest_imgs.append(dataset[indice][0])
@@ -83,9 +83,9 @@ def knn_inference(model, data, train_dataset, image_type, mean, std, device, top
             label = list(dataset.class_to_idx.keys())[maxlabel]
             
             if save_image_folder:
-                Path(save_image_folder).mkdir(parents=True, exist_ok=True)
-
-                shutil.copyfile(image_path, str(Path(save_image_folder).joinpath(label, Path(image_path).name)))
+                dst = Path(save_image_folder, label)
+                dst.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(image_path, str(dst.joinpath(Path(image_path).name)))
         if save_image_folder and nearest_imgs:
             imsave(make_grid(nearest_imgs), mean, std, save_image_folder, 'nearest_imgs')
 
@@ -113,17 +113,17 @@ def extract_query_features(model, image_path, image_size, device, mean, std):
 def general_inference(model, data, query_image, device, mean, std, top, image_type, image_size, save_image_folder):
     result = []
 
-    if os.path.isfile(data):
+    if Path(data).is_file():
         query_features = extract_query_features(model, query_image, image_size, device, mean, std)
         output = extract_query_features(model, data, image_size, device, mean, std)
         score = torch.cosine_similarity(output, query_features)
         result.append([score.detach().item(), data])
-    elif os.path.isdir(data):
-        for image in tqdm(glob(f'{data}\**\*.{image_type}', recursive=True)):
+    elif Path(data).is_dir():
+        for image in tqdm(sorted(Path(data).rglob(f'*.{image_type}'))):
             query_features = extract_query_features(model, query_image, image_size, device, mean, std)
-            output = extract_query_features(model, image, image_size, device, mean, std)
+            output = extract_query_features(model, str(image), image_size, device, mean, std)
             score = torch.cosine_similarity(output, query_features)
-            result.append([score.detach().item(), image])
+            result.append([score.detach().item(), str(image)])
     elif '*' in data:
         for image in tqdm(sorted(Path(data).parent.glob(Path(data).name))):
             query_features = extract_query_features(model, query_image, image_size, device, mean, std)
@@ -144,7 +144,7 @@ def general_inference(model, data, query_image, device, mean, std, top, image_ty
     result_df.to_csv(os.path.join(save_image_folder, 'result.csv'))
 
 def total_inference(model, train_dataset, data, query_image, query_label, device, mean, std, top, image_type, image_size, save_image_folder):
-    dataset = ImageFolder(train_dataset, select_data_transforms('train', mean, std))
+    dataset = ImageFolder(train_dataset, DataTransformFactory.create_transform('train', mean, std))
     match_finder = MatchFinder(distance=CosineSimilarity(), threshold=0.9)
     inference_model = InferenceModel(model, match_finder=match_finder)
     inference_model.train_knn(dataset)
@@ -152,36 +152,39 @@ def total_inference(model, train_dataset, data, query_image, query_label, device
     result = []
     knn_result = []
 
-    if os.path.isfile(data):
+    if Path(data).is_file():
         query_features = extract_query_features(model, query_image, image_size, device, mean, std)
         output = extract_query_features(model, data, image_size, device, mean, std)
         score = torch.cosine_similarity(output, query_features)
         
         nearest_imgs = []
-        image_tensor = trans(image, select_data_transforms('train', mean, std), device)
-        distances, indices = inference_model.get_nearest_neighbors(image_tensor, top)
+        image_tensor = trans(data, DataTransformFactory.create_transform('train', mean, std), device)
+        _, indices = inference_model.get_nearest_neighbors(image_tensor, top)
         for indice in indices.cpu()[0]:
             nearest_imgs.append(dataset[indice][0])
             knn_result.append(dataset[indice][1])
         maxlabel = max(knn_result, key=knn_result.count)
         label = list(dataset.class_to_idx.keys())[maxlabel]
-        result.append([score.detach().item(), label, image])
+        result.append([score.detach().item(), label, data])
+        
+        for i, (score, lb, im) in enumerate(result):
+            print(f'Rank {i + 1} Score: {score}, Label: {lb}, Image Path: {im}')
 
-    elif os.path.isdir(data):
-        for image in tqdm(glob(f'{data}\**\*.{image_type}', recursive=True)):
+    elif Path(data).is_dir():
+        for image in tqdm(sorted(Path(data).rglob(f'*.{image_type}'))):
             query_features = extract_query_features(model, query_image, device, mean, std)
-            output = extract_query_features(model, image, device, mean, std)
+            output = extract_query_features(model, str(image), device, mean, std)
             score = torch.cosine_similarity(output, query_features)
 
             nearest_imgs = []
-            image_tensor = trans(image, select_data_transforms('train', mean, std), device)
-            distances, indices = inference_model.get_nearest_neighbors(image_tensor, top)
+            image_tensor = trans(str(image), DataTransformFactory.create_transform('train', mean, std), device)
+            _, indices = inference_model.get_nearest_neighbors(image_tensor, top)
             for indice in indices.cpu()[0]:
                 nearest_imgs.append(dataset[indice][0])
                 knn_result.append(dataset[indice][1])
             maxlabel = max(knn_result, key=knn_result.count)
             label = list(dataset.class_to_idx.keys())[maxlabel]
-            result.append([score.detach().item(), label, image])
+            result.append([score.detach().item(), label, str(image)])
     
     result.sort(reverse=True)
     result_df = pd.DataFrame(result, columns=['Score', 'Label', 'ImagePath'])
@@ -206,15 +209,20 @@ def main(weights, data, train_dataset, query_image, query_label, image_type, ima
         os.makedirs(os.path.join(save_image_folder))
 
     if mean_std_file:
-        mean, std = read_mean_std(mean_std_file)
+        mean, std = DataStatistics.get_mean_std(Path(mean_std_file))
 
     if model_structure == 'EfficientArcFaceModel':
         model = EfficientArcFaceModel(embedding_size=embedding_size).to(device)
         model.load_state_dict(torch.load(weights))
         model.cuda()
         model.eval()
-    elif model_structure == 'DOLG':
+    elif model_structure == 'DOLGModel':
         model = DOLGModel(embedding_size=embedding_size).to(device)
+        model.load_state_dict(torch.load(weights))
+        model.cuda()
+        model.eval()
+    elif model_structure == 'MLGModel':
+        model = MLGModel(embedding_size=embedding_size).to(device)
         model.load_state_dict(torch.load(weights))
         model.cuda()
         model.eval()
@@ -242,7 +250,7 @@ def parse_opt():
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--top', type=int, default=3)
     parser.add_argument('--mode', type=str, default='')
-    parser.add_argument('--model-structure', type=str, default='EfficientArcFaceModel')
+    parser.add_argument('--model-structure', type=str, choices=['EfficientArcFaceModel', 'DOLGModel', 'MLGModel'], default='EfficientArcFaceModel')
     parser.add_argument('--embedding-size', type=int, default='512')
 
     opt = parser.parse_args()

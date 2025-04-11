@@ -7,7 +7,7 @@ from pathlib import Path
 from torchvision.utils import save_image
 from pytorch_metric_learning.distances import CosineSimilarity
 from pytorch_metric_learning.utils.inference import InferenceModel, MatchFinder
-from utils import read_mean_std, select_data_transforms, load_model, UnNormalize
+from utils import DataStatistics, DataTransformFactory, load_model, UnNormalize
 
 
 def create_inference_model(model_path, model_structure, embedding_size, faiss_index, threshold):
@@ -57,7 +57,7 @@ def process_image(image_path, mean, std):
     """
     image_array = cv2.imread(image_path)
     image = Image.fromarray(cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB))
-    data_transforms = select_data_transforms('train', mean, std)
+    data_transforms = DataTransformFactory.create_transform('train', mean, std)
     image_transforms = data_transforms(image)
     image_tensor = image_transforms.unsqueeze(0).to('cuda' if torch.cuda.is_available() else 'cpu')
     
@@ -67,7 +67,7 @@ def main(opt):
     inference_model = create_inference_model(opt.model_path, opt.model_structure, opt.embedding_size, opt.faiss_index, opt.threshold)
     dataset = load_dataset(opt.dataset_pkl)
     classes = dataset.classes
-    mean, std = read_mean_std(Path(opt.mean_std_file))
+    mean, std = DataStatistics.get_mean_std(Path(opt.mean_std_file))
     unnormalize = UnNormalize(mean, std)
     
     if Path(opt.data).is_file():
