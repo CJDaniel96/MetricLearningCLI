@@ -10,8 +10,10 @@ from torch.utils.tensorboard import SummaryWriter
 from pytorch_metric_learning import losses
 from pytorch_metric_learning.utils.accuracy_calculator import AccuracyCalculator
 from sklearn.metrics import silhouette_score
-from model import DOLGModel, EfficientArcFaceModel, MLGModel
+from model import DOLGModel, EfficientArcFaceModel, MLGModel, MLGModelV2
+from losses_ext import HybridMarginLoss, is_hybrid_loss
 from utils import EarlyStopping, setup_seed, create_dataloader, DataStatistics, save_class_to_idx, get_embeddings, plot_bar_chart, plot_silhouette_distribution, get_classes_threshold
+from evaluate import evaluate_model_on_testset
 
 
 @dataclass
@@ -64,7 +66,8 @@ class ModelFactory:
         model_classes = {
             "EfficientArcFaceModel": EfficientArcFaceModel,
             "DOLGModel": DOLGModel,
-            "MLGModel": MLGModel
+            "MLGModel": MLGModel,
+            "MLGModelV2": MLGModelV2
         }
         
         model_class = model_classes.get(config.model_type)
@@ -98,7 +101,8 @@ class ModelFactory:
         """
         loss_classes = {
             "SubCenterArcFaceLoss": losses.SubCenterArcFaceLoss,
-            "ArcFaceLoss": losses.ArcFaceLoss
+            "ArcFaceLoss": losses.ArcFaceLoss,
+            "HybridMarginLoss": HybridMarginLoss
         }
         
         loss_class = loss_classes.get(config.loss_type)
@@ -182,70 +186,78 @@ class Trainer:
         )
 
     def train(self) -> None:
-        """Execute the training loop."""
         best_loss = float('inf')
-        
+
         for epoch in range(self.config.epochs):
-            print(f'Epoch {epoch + 1}/{self.config.epochs}')
-            print('-' * 10)
+            print(f'📘 Epoch {epoch + 1}/{self.config.epochs}')
+            print('-' * 40)
 
             train_loss = self._train_epoch()
             val_loss = self._validate_epoch()
-            self._log_metrics(epoch, train_loss, val_loss, False)
-            
+
+            self._log_metrics(epoch, train_loss, val_loss, best_model=False)
+
             if val_loss < best_loss:
                 best_loss = val_loss
                 self._save_model('best.pt', val_loss)
-                self._log_metrics(epoch, train_loss, val_loss, True)
-                
+                self._log_metrics(epoch, train_loss, val_loss, best_model=True)
+
             self._save_checkpoint(epoch, train_loss)
-            
+
+            print(f"🔍 Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Best Val Loss: {best_loss:.4f}\n")
+
             if self._should_early_stop(val_loss):
+                print("🛑 Early stopping triggered.")
                 break
 
     def _train_epoch(self) -> float:
-        """Train the model for one epoch.
-
-        Returns:
-            The average training loss for the epoch.
-        """
         self.model.train()
         total_loss = 0.0
-        
+
         for inputs, labels in tqdm(self.train_loader):
             inputs, labels = inputs.to(self.device), labels.to(self.device)
-            
+
             self.optimizer.zero_grad()
             self.loss_optimizer.zero_grad()
-            
+
             embeddings = self.model(inputs)
-            loss = self.criterion(embeddings, labels)
+
+            if is_hybrid_loss(self.criterion):
+                pairs = self.criterion.miner(embeddings, labels)
+                loss = self.criterion.triplet(embeddings, labels, pairs) + \
+                       self.criterion.cosface(embeddings, labels) + \
+                       self.criterion.center_weight * self.criterion.center(embeddings, labels)
+            else:
+                loss = self.criterion(embeddings, labels)
+
             loss.backward()
-            
             self.optimizer.step()
             self.loss_optimizer.step()
             self.scheduler.step()
             self.loss_scheduler.step()
-            
+
             total_loss += loss.item()
-            
+
         return total_loss / len(self.train_loader)
-
+    
     def _validate_epoch(self) -> float:
-        """Validate the model for one epoch.
-
-        Returns:
-            The average validation loss for the epoch.
-        """
         self.model.eval()
         total_loss = 0.0
-        
+
         with torch.no_grad():
             for inputs, labels in tqdm(self.val_loader):
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 embeddings = self.model(inputs)
-                total_loss += self.criterion(embeddings, labels).item()
-                
+
+                if is_hybrid_loss(self.criterion):
+                    loss = self.criterion.cosface(embeddings, labels) + \
+                           self.criterion.triplet(embeddings, labels, None) + \
+                           self.criterion.center_weight * self.criterion.center(embeddings, labels)
+                else:
+                    loss = self.criterion(embeddings, labels)
+
+                total_loss += loss.item()
+
         return total_loss / len(self.val_loader)
 
     def _log_metrics(self, epoch: int, train_loss: float, val_loss: float, best_model: bool = False) -> None:
@@ -305,11 +317,6 @@ class Trainer:
             )
             
             df_thresholds, df_cross_stats = get_classes_threshold(self.val_dataset, self.model, self.save_dir / "thresholds")
-            
-            print("Within-class stats:\n", df_thresholds)
-            print("Cross-class mean:\n", df_cross_stats["mean"])
-            print("Cross-class max:\n", df_cross_stats["max"])
-            print("Cross-class min:\n", df_cross_stats["min"])
 
     def _save_thresholds_to_json(self, thresholds_data: Dict[str, float], thresholds_file: str, folder_name: str = "thresholds") -> None:
         """Save class-specific thresholds to a JSON file.

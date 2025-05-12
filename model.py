@@ -160,22 +160,32 @@ class MultiAtrous(nn.Module):
         local_feat = torch.cat(local_feat, dim=1)
         return local_feat
     
-
 class OrthogonalFusion(nn.Module):
     def __init__(self):
         super().__init__()
+        self.projector = None  # will be defined on first forward pass if needed
 
-    def forward(self, local_feat, global_feat):
-        global_feat_norm = torch.norm(global_feat, p=2, dim=1)
-        projection = torch.bmm(global_feat.unsqueeze(1), torch.flatten(
-            local_feat, start_dim=2))
-        projection = torch.bmm(global_feat.unsqueeze(
-            2), projection).view(local_feat.size())
-        projection = projection / \
-            (global_feat_norm * global_feat_norm).view(-1, 1, 1, 1)
+    def forward(self, local_feat: torch.Tensor, global_feat: torch.Tensor) -> torch.Tensor:
+        B, C_local, H, W = local_feat.shape
+        B_g, C_global = global_feat.shape
+
+        assert B == B_g, "Batch size mismatch between local and global features"
+
+        if C_global != C_local:
+            if self.projector is None:
+                self.projector = nn.Linear(C_global, C_local).to(global_feat.device)
+            global_feat = self.projector(global_feat)
+
+        global_feat_norm = torch.norm(global_feat, p=2, dim=1, keepdim=True) + 1e-6
+        global_unit = global_feat / global_feat_norm  # [B, C_local]
+        local_flat = local_feat.view(B, C_local, -1)  # [B, C, H*W]
+
+        projection = torch.bmm(global_unit.unsqueeze(1), local_flat)           # [B, 1, H*W]
+        projection = torch.bmm(global_unit.unsqueeze(2), projection)           # [B, C, H*W]
+        projection = projection.view(B, C_local, H, W)
         orthogonal_comp = local_feat - projection
-        global_feat = global_feat.unsqueeze(-1).unsqueeze(-1)
-        return torch.cat([global_feat.expand(orthogonal_comp.size()), orthogonal_comp], dim=1)
+        global_map = global_feat.unsqueeze(-1).unsqueeze(-1).expand_as(orthogonal_comp)
+        return torch.cat([global_map, orthogonal_comp], dim=1)  # [B, 2C, H, W]
 
 
 class LocalBranch(nn.Module):
@@ -377,4 +387,78 @@ class MLGModel(nn.Module):
         # Final embedding
         embedding = self.head(feat)
 
+        return embedding
+    
+class LaplacianLayer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        kernel = torch.tensor([[0, 1, 0], [1, -4, 1], [0, 1, 0]]).float().unsqueeze(0).unsqueeze(0)
+        self.weight = nn.Parameter(kernel, requires_grad=False)
+
+    def forward(self, x):
+        return F.conv2d(x, self.weight.repeat(x.size(1), 1, 1, 1), padding=1, groups=x.size(1))
+
+class GlobalPooling(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+
+    def forward(self, x):
+        return torch.cat([self.avg_pool(x), self.max_pool(x)], dim=1)
+
+class L2Norm(nn.Module):
+    def forward(self, x):
+        return F.normalize(x, p=2, dim=1)
+
+class MLGModelV2(nn.Module):
+    def __init__(self, model_name='efficientnetv2_s', pretrained=False, features_only=True, embedding_size=128) -> None:
+        super().__init__()
+        self.backbone = timm.create_model(model_name, pretrained=pretrained, features_only=features_only)
+        dummy_input = torch.randn(1, 3, 224, 224)
+        features = self.backbone(dummy_input)
+        local_in_channels = features[-2].shape[1]
+        global_in_channels = features[-1].shape[1]
+
+        self.local_branch_conv = nn.Sequential(
+            nn.Conv2d(local_in_channels, 1280, 1, 1, bias=False),
+            nn.BatchNorm2d(1280, 0.001),
+            nn.SiLU()
+        )
+        self.local_laplacian = LaplacianLayer()
+        self.local_branch_attention = nn.MultiheadAttention(embed_dim=1280, num_heads=8)
+
+        self.global_branch = nn.Sequential(
+            nn.Conv2d(global_in_channels, 1280, 1, 1, bias=False),
+            nn.BatchNorm2d(1280, 0.001),
+            nn.SiLU()
+        )
+        self.global_pool = GlobalPooling()
+
+        self.orthogonal_fusion = OrthogonalFusion()
+
+        self.head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(1280 * 2, embedding_size),
+            nn.Linear(embedding_size, embedding_size),
+            nn.BatchNorm1d(embedding_size),
+            nn.ReLU(),
+            L2Norm()
+        )
+
+    def forward(self, x):
+        features = self.backbone(x)
+        local_features = self.local_branch_conv(features[-2])
+        local_features = self.local_laplacian(local_features)
+        B, C, H, W = local_features.shape
+        local_flat = local_features.view(B, C, -1).permute(2, 0, 1)
+        local_attended, _ = self.local_branch_attention(local_flat, local_flat, local_flat)
+        local_features = local_attended.permute(1, 2, 0).view(B, C, H, W)
+
+        global_features = self.global_branch(features[-1])
+        global_features = self.global_pool(global_features).view(B, -1)
+
+        fused = self.orthogonal_fusion(local_features, global_features)
+        embedding = self.head(fused)
         return embedding

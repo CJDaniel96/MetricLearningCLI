@@ -21,7 +21,7 @@ def main(opt):
         None
     """
     model = load_model(opt.model_structure, opt.model_path, opt.embedding_size)
-    mean, std = DataStatistics.get_mean_std(Path(opt.dataset_folder))
+    mean, std = DataStatistics.get_mean_std(Path(opt.mean_std_file))
     if Path(opt.dataset_pkl).exists():
         dataset = joblib.load(opt.dataset_pkl)
     elif Path(opt.dataset_folder).exists():
@@ -74,6 +74,7 @@ def parse_opt(known=False):
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset-folder', type=str, default='data')
+    parser.add_argument('--mean-std-file', type=str, default='mean_std.txt')
     parser.add_argument('--dataset-pkl', type=str, default='dataset.pkl')
     parser.add_argument('--model-path', type=str, default='model')
     parser.add_argument('--threshold', type=float, default=0.5)

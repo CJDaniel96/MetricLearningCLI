@@ -229,7 +229,7 @@ class ModelFactory:
             raise ValueError(f"Invalid model structure: {model_structure}")
 
         model = model_class(pretrained=False, embedding_size=embedding_size).to(device)
-        model.load_state_dict(torch.load(model_path))
+        model.load_state_dict(torch.load(model_path, weights_only=True))
         model.eval()
         return model
 
@@ -366,10 +366,9 @@ def get_classes_threshold(dataset, model, save_dir: Path, max_samples_per_class:
     plot_similarity_histograms(class_sims, Path(f"{save_dir}/similarity_plots"))
     return df_thresholds, df_cross_stats
 
-def compute_class_similarities(embeddings: torch.Tensor, labels: torch.Tensor, 
-                             max_samples_per_class: int = 100) -> Tuple[Dict[int, list], Dict[Tuple[int, int], list]]:
+def compute_class_similarities(embeddings: torch.Tensor, labels: torch.Tensor, max_samples_per_class: int = 100) -> Tuple[Dict[int, list], Dict[Tuple[int, int], list]]:
     """
-    Compute pairwise cosine similarity within and across classes.
+    Compute pairwise cosine similarity within and across classes using cosine_similarity.
     
     Args:
         embeddings: Tensor of shape [N, D]
@@ -386,12 +385,12 @@ def compute_class_similarities(embeddings: torch.Tensor, labels: torch.Tensor,
     if labels.dim() == 2:
         labels = labels.squeeze(1)
     
-    unique_classes = torch.unique(labels)
+    # 預先將 unique_classes 轉為整數列表
+    unique_classes = [int(cls.item()) for cls in torch.unique(labels)]
     class_embeddings = {}
     
     # 按類別分割並抽樣嵌入
     for cls in unique_classes:
-        cls = int(cls.item())
         cls_mask = labels == cls
         cls_embs = embeddings[cls_mask]
         
@@ -400,24 +399,32 @@ def compute_class_similarities(embeddings: torch.Tensor, labels: torch.Tensor,
             indices = torch.randperm(cls_embs.size(0))[:max_samples_per_class]
             cls_embs = cls_embs[indices]
         
-        class_embeddings[cls] = F.normalize(cls_embs, dim=1)
+        class_embeddings[cls] = cls_embs  # 不在這裡正規化
     
     # 計算類別內相似性
-    for cls, norm_embs in class_embeddings.items():
-        if norm_embs.size(0) < 2:
+    for cls, emb in class_embeddings.items():
+        if emb.size(0) < 2:
             continue
-        sim_matrix = torch.mm(norm_embs, norm_embs.t())
-        mask = ~torch.eye(sim_matrix.size(0), dtype=torch.bool, device=sim_matrix.device)
-        pairwise_sims = sim_matrix[mask]
-        class_sims[cls] = pairwise_sims.cpu().numpy().tolist()
+        # 計算所有成對餘弦相似性
+        n = emb.size(0)
+        sims = []
+        for i in range(n):
+            for j in range(i + 1, n):  # 避免計算自身相似性
+                sim = F.cosine_similarity(emb[i:i+1], emb[j:j+1], dim=1)
+                sims.append(sim.item())
+        class_sims[cls] = sims
     
     # 計算跨類別相似性
     for i, cls_i in enumerate(unique_classes):
-        for cls_j in unique_classes[i+1:]:  # 只計算上三角，避免重複
-            emb_i, emb_j = class_embeddings[int(cls_i.item())], class_embeddings[int(cls_j.item())]
-            cross_sim_matrix = torch.mm(emb_i, emb_j.t())
-            cross_sims = cross_sim_matrix.flatten()
-            cross_class_sims[(int(cls_i.item()), int(cls_j.item()))] = cross_sims.cpu().numpy().tolist()
+        for cls_j in unique_classes[i + 1:]:  # 只計算上三角
+            emb_i, emb_j = class_embeddings[cls_i], class_embeddings[cls_j]
+            sims = []
+            # 計算 emb_i 和 emb_j 之間的所有成對相似性
+            for vec_i in emb_i:
+                for vec_j in emb_j:
+                    sim = F.cosine_similarity(vec_i.unsqueeze(0), vec_j.unsqueeze(0), dim=1)
+                    sims.append(sim.item())
+            cross_class_sims[(cls_i, cls_j)] = sims
     
     return class_sims, cross_class_sims
 

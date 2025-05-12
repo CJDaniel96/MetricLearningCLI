@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import shutil
 import cv2
+import joblib
 from PIL import Image
 from pathlib import Path
 from tqdm import tqdm
@@ -14,7 +15,7 @@ from torchvision.utils import make_grid
 from matplotlib import pyplot as plt
 from pytorch_metric_learning.distances import CosineSimilarity
 from pytorch_metric_learning.utils.inference import InferenceModel, MatchFinder
-from utils import setup_seed, DataTransformFactory, DataStatistics
+from utils import setup_seed, DataTransformFactory, DataStatistics, load_model
 from model import EfficientArcFaceModel, DOLGModel, MLGModel
 
 
@@ -46,6 +47,39 @@ def inference(model, image_path, data_transforms, device):
         embeddings = model(image_tensor)
 
     return embeddings
+
+def load_dataset(dataset_pkl):
+    """
+    Load a dataset from a pickle file.
+
+    Args:
+        dataset_pkl (str): The path to the dataset pickle file.
+
+    Returns:
+        dataset: The loaded dataset.
+    """
+    return joblib.load(dataset_pkl)
+
+def create_inference_model(model_path, model_structure, embedding_size, faiss_index, threshold):
+    """
+    Create an inference model.
+
+    Args:
+        model_path (str): The path to the model weights.
+        model_structure (str): The structure of the model.
+        embedding_size (int): The size of the embedding layer.
+        faiss_index (str): The path to the faiss index file.
+        threshold (float): The threshold for matching.
+
+    Returns:
+        InferenceModel: The created inference model.
+    """
+    model = load_model(model_structure, model_path, embedding_size)
+    match_finder = MatchFinder(distance=CosineSimilarity(), threshold=0.9)
+    inference_model = InferenceModel(model, match_finder=match_finder)
+    inference_model.load_knn_func(faiss_index)
+    
+    return inference_model
 
 def knn_inference(model, data, train_dataset, image_type, mean, std, device, top, save_image_folder):
     result = []
@@ -110,12 +144,15 @@ def extract_query_features(model, image_path, image_size, device, mean, std):
     
     return features
 
-def general_inference(model, data, query_image, device, mean, std, top, image_type, image_size, save_image_folder):
+def general_inference(model, data, query_image, device, mean, std, top, image_type, image_size, inference_model, dataset_pkl, save_image_folder):
     result = []
+    dataset = load_dataset(dataset_pkl)
+    classes = dataset.classes
 
     if Path(data).is_file():
         query_features = extract_query_features(model, query_image, image_size, device, mean, std)
         output = extract_query_features(model, data, image_size, device, mean, std)
+        is_match = inference_model.is_match(query_features, output)
         score = torch.cosine_similarity(output, query_features)
         result.append([score.detach().item(), data])
     elif Path(data).is_dir():
@@ -199,40 +236,41 @@ def total_inference(model, train_dataset, data, query_image, query_label, device
 
     result_df.to_csv(os.path.join(save_image_folder, 'result.csv'))
 
-def main(weights, data, train_dataset, query_image, query_label, image_type, image_size, seed, mean_std_file, top, confidence, save_image_folder, mode, model_structure, embedding_size):
-    setup_seed(seed)
+def main(opt):
+    setup_seed(opt.seed)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Use Device: {device}')
 
-    if save_image_folder and not os.path.exists(os.path.join(save_image_folder)):
-        os.makedirs(os.path.join(save_image_folder))
+    if opt.save_image_folder and not os.path.exists(os.path.join(opt.save_image_folder)):
+        os.makedirs(os.path.join(opt.save_image_folder))
 
-    if mean_std_file:
-        mean, std = DataStatistics.get_mean_std(Path(mean_std_file))
+    if opt.mean_std_file:
+        mean, std = DataStatistics.get_mean_std(Path(opt.mean_std_file))
 
-    if model_structure == 'EfficientArcFaceModel':
-        model = EfficientArcFaceModel(embedding_size=embedding_size).to(device)
-        model.load_state_dict(torch.load(weights))
+    if opt.model_structure == 'EfficientArcFaceModel':
+        model = EfficientArcFaceModel(embedding_size=opt.embedding_size).to(device)
+        model.load_state_dict(torch.load(opt.weights))
         model.cuda()
         model.eval()
-    elif model_structure == 'DOLGModel':
-        model = DOLGModel(embedding_size=embedding_size).to(device)
-        model.load_state_dict(torch.load(weights))
+    elif opt.model_structure == 'DOLGModel':
+        model = DOLGModel(embedding_size=opt.embedding_size).to(device)
+        model.load_state_dict(torch.load(opt.weights))
         model.cuda()
         model.eval()
-    elif model_structure == 'MLGModel':
-        model = MLGModel(embedding_size=embedding_size).to(device)
-        model.load_state_dict(torch.load(weights))
+    elif opt.model_structure == 'MLGModel':
+        model = MLGModel(embedding_size=opt.embedding_size).to(device)
+        model.load_state_dict(torch.load(opt.weights))
         model.cuda()
         model.eval()
 
-    if mode == 'total':
-        total_inference(model, train_dataset, data, query_image, query_label, device, mean, std, top, image_type, image_size, save_image_folder)
-    elif mode == 'knn':
-        knn_inference(model, data, train_dataset, image_type, mean, std, device, top, save_image_folder)
+    if opt.mode == 'total':
+        total_inference(model, opt.train_dataset, opt.data, opt.query_image, opt.query_label, device, mean, std, opt.top, opt.image_type, opt.image_size, opt.save_image_folder)
+    elif opt.mode == 'knn':
+        knn_inference(model, opt.data, opt.train_dataset, opt.image_type, mean, std, device, opt.top, opt.save_image_folder)
     else:
-        general_inference(model, data, query_image, device, mean, std, top, image_type, image_size, save_image_folder)
+        inference_model = create_inference_model(opt.weights, opt.model_structure, opt.embedding_size, opt.faiss_index, opt.threshold)
+        general_inference(model, opt.data, opt.query_image, device, mean, std, opt.top, opt.image_type, opt.image_size, inference_model, opt.dataset_pkl, opt.save_image_folder)
 
 def parse_opt():
     parser = argparse.ArgumentParser()
@@ -252,6 +290,10 @@ def parse_opt():
     parser.add_argument('--mode', type=str, default='')
     parser.add_argument('--model-structure', type=str, choices=['EfficientArcFaceModel', 'DOLGModel', 'MLGModel'], default='EfficientArcFaceModel')
     parser.add_argument('--embedding-size', type=int, default='512')
+    parser.add_argument('--dataset-pkl', type=str, default='dataset.pkl')
+    parser.add_argument('--faiss-index', type=str, default='')
+    parser.add_argument('--threshold', type=float, default=0.5)
+    parser.add_argument('--k', type=int, default=5)
 
     opt = parser.parse_args()
 
