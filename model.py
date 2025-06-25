@@ -161,31 +161,28 @@ class MultiAtrous(nn.Module):
         return local_feat
     
 class OrthogonalFusion(nn.Module):
-    def __init__(self):
+    def __init__(self, input_dim_local=1280, input_dim_global=1280):
         super().__init__()
-        self.projector = None  # will be defined on first forward pass if needed
+        if input_dim_global != input_dim_local:
+            self.projector = nn.Linear(input_dim_global, input_dim_local)
+        else:
+            self.projector = nn.Identity()
 
-    def forward(self, local_feat: torch.Tensor, global_feat: torch.Tensor) -> torch.Tensor:
+    def forward(self, local_feat, global_feat):
         B, C_local, H, W = local_feat.shape
-        B_g, C_global = global_feat.shape
-
-        assert B == B_g, "Batch size mismatch between local and global features"
-
-        if C_global != C_local:
-            if self.projector is None:
-                self.projector = nn.Linear(C_global, C_local).to(global_feat.device)
-            global_feat = self.projector(global_feat)
+        global_feat = self.projector(global_feat)
 
         global_feat_norm = torch.norm(global_feat, p=2, dim=1, keepdim=True) + 1e-6
-        global_unit = global_feat / global_feat_norm  # [B, C_local]
-        local_flat = local_feat.view(B, C_local, -1)  # [B, C, H*W]
+        global_unit = global_feat / global_feat_norm
+        local_flat = local_feat.view(B, C_local, -1)
 
-        projection = torch.bmm(global_unit.unsqueeze(1), local_flat)           # [B, 1, H*W]
-        projection = torch.bmm(global_unit.unsqueeze(2), projection)           # [B, C, H*W]
-        projection = projection.view(B, C_local, H, W)
+        projection = torch.bmm(global_unit.unsqueeze(1), local_flat)
+        projection = torch.bmm(global_unit.unsqueeze(2), projection).view(B, C_local, H, W)
+
         orthogonal_comp = local_feat - projection
         global_map = global_feat.unsqueeze(-1).unsqueeze(-1).expand_as(orthogonal_comp)
-        return torch.cat([global_map, orthogonal_comp], dim=1)  # [B, 2C, H, W]
+
+        return torch.cat([global_map, orthogonal_comp], dim=1)
 
 
 class LocalBranch(nn.Module):
@@ -407,10 +404,6 @@ class GlobalPooling(nn.Module):
     def forward(self, x):
         return torch.cat([self.avg_pool(x), self.max_pool(x)], dim=1)
 
-class L2Norm(nn.Module):
-    def forward(self, x):
-        return F.normalize(x, p=2, dim=1)
-
 class MLGModelV2(nn.Module):
     def __init__(self, model_name='efficientnetv2_s', pretrained=False, features_only=True, embedding_size=128) -> None:
         super().__init__()
@@ -435,16 +428,14 @@ class MLGModelV2(nn.Module):
         )
         self.global_pool = GlobalPooling()
 
-        self.orthogonal_fusion = OrthogonalFusion()
+        self.orthogonal_fusion = OrthogonalFusion(1280, 2560)
 
         self.head = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
             nn.Linear(1280 * 2, embedding_size),
             nn.Linear(embedding_size, embedding_size),
-            nn.BatchNorm1d(embedding_size),
-            nn.ReLU(),
-            L2Norm()
+            nn.BatchNorm1d(embedding_size)
         )
 
     def forward(self, x):

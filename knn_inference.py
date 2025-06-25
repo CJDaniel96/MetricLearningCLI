@@ -120,15 +120,14 @@ def match_mode(data, query_image, inference_model, mean, std, save_dir):
 
 def main(opt):
     inference_model = create_inference_model(opt.model_path, opt.model_structure, opt.embedding_size, opt.faiss_index, opt.threshold)
-    dataset = load_dataset(opt.dataset_pkl)
-    classes = dataset.classes
     mean, std = DataStatistics.get_mean_std(Path(opt.mean_std_file))
     unnormalize = UnNormalize(mean, std)
-    
     save_dir = Path(opt.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
     if opt.mode == 'knn':
+        dataset = load_dataset(opt.dataset_pkl)
+        classes = dataset.classes
         knn_mode(opt.data, inference_model, dataset, classes, unnormalize, opt.k, mean, std, save_dir)
     elif opt.mode == 'match':
         match_mode(opt.data, opt.query_image, inference_model, mean, std, save_dir)

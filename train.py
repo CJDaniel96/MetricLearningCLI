@@ -277,8 +277,8 @@ class Trainer:
             reference=train_embeddings,
             reference_labels=train_labels.squeeze(1)
         )
-        
-        silhouette_scores = silhouette_score(val_embeddings.cpu().numpy(), val_labels.cpu().numpy())
+
+        silhouette_scores = silhouette_score(val_embeddings.cpu().numpy(), val_labels.cpu().numpy().ravel())
         
         metrics_data = {
             'Epoch': epoch + 1,
@@ -381,7 +381,6 @@ class Trainer:
         if self.early_stopping:
             self.early_stopping(val_loss)
             if self.early_stopping.early_stop:
-                print("Early stopping triggered")
                 return True
         return False
 
