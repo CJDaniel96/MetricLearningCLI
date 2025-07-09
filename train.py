@@ -406,8 +406,8 @@ def parse_arguments() -> TrainingConfig:
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--early-stop-patience', type=int, default=3)
     parser.add_argument('--pretrained-weights', type=str, default=None)
-    parser.add_argument('--model-type', default='EfficientArcFaceModel')
-    parser.add_argument('--loss-type', default='SubCenterArcFaceLoss')
+    parser.add_argument('--model-type', default='EfficientArcFaceModel', choices=['EfficientArcFaceModel', 'DOLGModel', 'MLGModel', 'MLGModelV2'])
+    parser.add_argument('--loss-type', default='SubCenterArcFaceLoss', choices=['SubCenterArcFaceLoss', 'ArcFaceLoss', 'HybridMarginLoss'])
     parser.add_argument('--optimizer-type', default='Adam')
     
     args = parser.parse_args()
