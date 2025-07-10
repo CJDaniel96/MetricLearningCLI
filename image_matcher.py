@@ -10,7 +10,7 @@ from pytorch_metric_learning.utils.inference import InferenceModel, MatchFinder
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple
-from utils import DataStatistics, DataTransformFactory, load_model, UnNormalize
+from utils import DataStatistics, DataTransformFactory, load_model
 
 # Configure root logger
 logging.basicConfig(
@@ -38,7 +38,6 @@ class ImageMatcher:
         model_path: str,
         model_structure: str,
         embedding_size: int,
-        faiss_index: str,
         threshold: float,
         mean_std_file: str,
         save_dir: str,
@@ -69,7 +68,6 @@ class ImageMatcher:
             model_path,
             model_structure,
             embedding_size,
-            faiss_index,
             threshold,
         )
 
@@ -78,19 +76,18 @@ class ImageMatcher:
         if not mean_std_path.is_file():
             raise FileNotFoundError(f"Mean/std file not found: {mean_std_file}")
         self.mean, self.std = DataStatistics.get_mean_std(mean_std_path)
-        self.unnormalize = UnNormalize(self.mean, self.std)
 
         # Prepare save directory
-        self.save_dir = Path(save_dir)
-        self.save_dir.mkdir(parents=True, exist_ok=True)
-        logging.info(f"Results will be saved to: {self.save_dir}")
+        if save_dir:
+            self.save_dir = Path(save_dir)
+            self.save_dir.mkdir(parents=True, exist_ok=True)
+            logging.info(f"Results will be saved to: {self.save_dir}")
 
     def _create_inference_model(
         self,
         model_path: str,
         model_structure: str,
         embedding_size: int,
-        faiss_index: str,
         threshold: float,
     ) -> InferenceModel:
         """
@@ -113,8 +110,7 @@ class ImageMatcher:
         model = load_model(model_structure, model_path, embedding_size)
         match_finder = MatchFinder(distance=CosineSimilarity(), threshold=threshold)
         inference_model = InferenceModel(model, match_finder=match_finder)
-        inference_model.load_knn_func(faiss_index)
-        logging.info("Model and index loaded successfully.")
+        logging.info("Model loaded successfully.")
         return inference_model
 
     def _process_image(self, image_path: str) -> torch.Tensor:
@@ -162,6 +158,30 @@ class ImageMatcher:
         except Exception as exc:
             logging.error(f"Error processing {image_path}: {exc}")
             return image_path, None
+        
+    def _match_file_score(
+        self,
+        image_path: Path,
+        query_tensor: torch.Tensor,
+    ) -> Tuple[Path, float]:
+        """
+        Get Score with a single image matches the preprocessed query.
+
+        Args:
+            image_path (Path): Path to the image to test.
+            query_tensor (torch.Tensor): Precomputed tensor of the query image.
+
+        Returns:
+            Tuple[Path, float]: The image path and match result (float).
+        """
+        try:
+            img_tensor = self._process_image(str(image_path))
+            distance = CosineSimilarity().pairwise_distance(img_tensor, query_tensor)
+            return image_path, distance
+        except Exception as exc:
+            logging.error(f"Error processing {image_path}: {exc}")
+            return image_path, 0.0
+    
 
     def run(
         self,
@@ -279,7 +299,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--save-dir",
-        required=True,
+        default="",
         help="Directory to save matched results",
     )
     parser.add_argument(
