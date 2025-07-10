@@ -387,13 +387,31 @@ class MLGModel(nn.Module):
         return embedding
     
 class LaplacianLayer(nn.Module):
-    def __init__(self):
+    def __init__(self, channels=1280):
+        """
+        初始化時需要傳入固定的 channel 數量。
+        """
         super().__init__()
-        kernel = torch.tensor([[0, 1, 0], [1, -4, 1], [0, 1, 0]]).float().unsqueeze(0).unsqueeze(0)
-        self.weight = nn.Parameter(kernel, requires_grad=False)
+        # 創建一個深度可分離卷積
+        # in_channels = out_channels = groups = channels
+        self.conv = nn.Conv2d(
+            in_channels=channels,
+            out_channels=channels,
+            kernel_size=3,
+            padding=1,
+            groups=channels, # 關鍵：設置 groups = in_channels 實現深度可分離卷積
+            bias=False
+        )
+
+        # 創建拉普拉斯核
+        kernel = torch.tensor([[0, 1, 0], [1, -4, 1], [0, 1, 0]]).float()
+        # 將核的形狀擴展為 (out_channels, 1, H, W)，即 (channels, 1, 3, 3)
+        # 每個輸出的 channel 都使用這個相同的核
+        self.conv.weight.data = kernel.unsqueeze(0).unsqueeze(0).repeat(channels, 1, 1, 1)
+        self.conv.weight.requires_grad = False # 鎖定權重
 
     def forward(self, x):
-        return F.conv2d(x, self.weight.repeat(x.size(1), 1, 1, 1), padding=1, groups=x.size(1))
+        return self.conv(x)
 
 class GlobalPooling(nn.Module):
     def __init__(self):
