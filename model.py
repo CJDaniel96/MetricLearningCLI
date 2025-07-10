@@ -303,7 +303,7 @@ class DOLGModel(nn.Module):
         return feat
     
 
-class MLGModel(nn.Module):
+class HOAM(nn.Module):
     """
     MLGModel class for extracting features using EfficientNetV2.
 
@@ -422,7 +422,7 @@ class GlobalPooling(nn.Module):
     def forward(self, x):
         return torch.cat([self.avg_pool(x), self.max_pool(x)], dim=1)
 
-class MLGModelV2(nn.Module):
+class HOAMV2(nn.Module):
     def __init__(self, model_name='efficientnetv2_s', pretrained=False, features_only=True, embedding_size=128) -> None:
         super().__init__()
         self.backbone = timm.create_model(model_name, pretrained=pretrained, features_only=features_only)
