@@ -10,10 +10,9 @@ from torch.utils.tensorboard import SummaryWriter
 from pytorch_metric_learning import losses
 from pytorch_metric_learning.utils.accuracy_calculator import AccuracyCalculator
 from sklearn.metrics import silhouette_score
-from model import DOLGModel, EfficientArcFaceModel, MLGModel, MLGModelV2
+from model import DOLGModel, EfficientArcFaceModel, HOAM, HOAMV2
 from losses_ext import HybridMarginLoss, is_hybrid_loss
 from utils import EarlyStopping, setup_seed, create_dataloader, DataStatistics, save_class_to_idx, get_embeddings, plot_bar_chart, plot_silhouette_distribution, get_classes_threshold
-from evaluate import evaluate_model_on_testset
 
 
 @dataclass
@@ -66,8 +65,8 @@ class ModelFactory:
         model_classes = {
             "EfficientArcFaceModel": EfficientArcFaceModel,
             "DOLGModel": DOLGModel,
-            "MLGModel": MLGModel,
-            "MLGModelV2": MLGModelV2
+            "HOAM": HOAM,
+            "HOAMV2": HOAMV2
         }
         
         model_class = model_classes.get(config.model_type)
@@ -406,8 +405,8 @@ def parse_arguments() -> TrainingConfig:
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--early-stop-patience', type=int, default=3)
     parser.add_argument('--pretrained-weights', type=str, default=None)
-    parser.add_argument('--model-type', default='EfficientArcFaceModel')
-    parser.add_argument('--loss-type', default='SubCenterArcFaceLoss')
+    parser.add_argument('--model-type', default='EfficientArcFaceModel', choices=['EfficientArcFaceModel', 'DOLGModel', 'HOAM', 'HOAMV2'])
+    parser.add_argument('--loss-type', default='SubCenterArcFaceLoss', choices=['SubCenterArcFaceLoss', 'ArcFaceLoss', 'HybridMarginLoss'])
     parser.add_argument('--optimizer-type', default='Adam')
     
     args = parser.parse_args()
