@@ -17,7 +17,7 @@ from pathlib import Path
 from pytorch_metric_learning import testers
 from collections import defaultdict
 
-from model import DOLGModel, EfficientArcFaceModel, MLGModel, MLGModelV2
+from model import DOLGModel, EfficientArcFaceModel, HOAM, HOAMV2
 
 # Constants
 DEFAULT_MEAN = [0.485, 0.456, 0.406]
@@ -205,8 +205,8 @@ class ModelFactory:
         'EfficientArcFaceModel': EfficientArcFaceModel,
         'DOLG': DOLGModel,
         'DOLGModel': DOLGModel,
-        'MLGModel': MLGModel,
-        'MLGModelV2': MLGModelV2
+        'HOAM': HOAM,
+        'HOAMV2': HOAMV2
     }
 
     @staticmethod
